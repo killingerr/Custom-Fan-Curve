@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use anyhow::Context;
+use log::{debug, error};
 use std::{
     collections::HashMap,
     fmt::Display,
@@ -25,7 +26,7 @@ use zbus::Interface;
 use crate::{
     charge_thresholds::{get_charge_profiles, get_charge_thresholds, set_charge_thresholds},
     errors::ProfileError,
-    fan::FanDaemon,
+    fan::{FanDaemon, FanCurveConfig},
     graphics::{Graphics, GraphicsMode},
     hid_backlight,
     hotplug::{mux, Detect, HotPlugDetect},
@@ -126,6 +127,55 @@ impl PowerDaemon {
             Err(error_message)
         }
     }
+    
+    fn load_fan_curve_from_file(&self, path: &Path) -> Result<FanCurveConfig, Box<dyn std::error::Error>> {
+        let file_content = fs::read_to_string(path)?;
+        let config: FanCurveConfig = serde_json::from_str(&file_content)?;
+        Ok(config)
+    }
+    
+    pub fn load_all_fan_curves(&self) -> zbus::fdo::Result<Vec<(String, Vec<(u8, u8)>)>> {
+    let mut curves = Vec::new();
+    let directories = [
+        "/etc/system76-power/fan_curves",
+        "/var/lib/system76-power/fan_curves",
+    ];
+
+    for dir in &directories {
+        debug!("Scanning directory: {}", dir);
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if let Ok(file_type) = entry.file_type() {
+                    if file_type.is_file() {
+                        if let Some(file_name) = entry.file_name().to_str() {
+                            if file_name.ends_with(".json") {
+                                debug!("Found JSON file: {}", file_name);
+                                match self.load_fan_curve_from_file(&entry.path()) {
+                                    Ok(curve) => {
+                                        debug!("Loaded curve: {} with {} points", curve.name, curve.points.len());
+                                        curves.push((
+                                            curve.name,
+                                            curve.points
+                                        ));
+                                    },
+                                    Err(e) => {
+                                        error!("Failed to load curve from file {}: {}", file_name, e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            error!("Failed to read directory: {}", dir);
+        }
+    }
+
+    debug!("Total curves loaded: {}", curves.len());
+    Ok(curves)
+  }
+
 }
 
 #[derive(Clone)]
@@ -348,25 +398,51 @@ impl System76Power {
         log::info!("SetFanCurve method registered");
         log::info!("SetFanCurve called with {} points", curve.len());
         let mut daemon = self.0.lock().await;
-        daemon.fan_daemon.set_fan_curve(curve)
+        daemon.fan_daemon.set_fan_curve(None, curve, false)
             .map_err(zbus_error_from_display)
     }
     
-    async fn set_fan_curve_persistent(&mut self, curve: Vec<(u8, u8)>) -> zbus::fdo::Result<()> {
+    async fn set_fan_curve_persistent(&mut self, name: String, curve: Vec<(u8, u8)>) -> zbus::fdo::Result<()> {
         let mut daemon = self.0.lock().await;
-        daemon.fan_daemon.set_fan_curve(curve.clone())
-            .map_err(zbus_error_from_display)?;
+    
+        let file_name = format!("{}.json", name.replace(" ", "_").to_lowercase());
+        let etc_path = Path::new("/etc/system76-power/fan_curves").join(&file_name);
+        let var_path = Path::new("/var/lib/system76-power/fan_curves").join(&file_name);
+    
+        daemon.fan_daemon.set_fan_curve(Some(name.clone()), curve.clone(), false)
+            .map_err(|e| zbus::fdo::Error::Failed(e))?;
+    
+        // Create directories if they don't exist
+        if let Err(e) = fs::create_dir_all(etc_path.parent().unwrap()) {
+            return Err(zbus::fdo::Error::Failed(format!("Failed to create directory: {}", e)));
+        }
+        if let Err(e) = fs::create_dir_all(var_path.parent().unwrap()) {
+            return Err(zbus::fdo::Error::Failed(format!("Failed to create directory: {}", e)));
+        }
+    
+        // Save to both locations
+        if let Err(e) = daemon.fan_daemon.save_fan_curve(&etc_path, name.clone()) {
+            return Err(zbus::fdo::Error::Failed(format!("Failed to save fan curve to /etc: {}", e)));
+        }
+        if let Err(e) = daemon.fan_daemon.save_fan_curve(&var_path, name.clone()) {
+            return Err(zbus::fdo::Error::Failed(format!("Failed to save fan curve to /var/lib: {}", e)));
+        }
+        
+        // Set as default
+        let default_path = Path::new("/etc/system76-power/fan_curves/default.json");
+        if let Err(e) = daemon.fan_daemon.save_fan_curve(default_path, name) {
+            return Err(zbus::fdo::Error::Failed(format!("Failed to save default fan curve: {}", e)));
+        }
+    
+        Ok(())
             
-        // Save to /etc/system76-power/fan_curve.json
-        let etc_path = Path::new("/etc/lib/system76-power/fan_curve.json");
-        daemon.fan_daemon.save_fan_curve(etc_path)
-            .map_err(zbus_error_from_display)?;
-            
-        // Save to /var/lib/system76-power/fan_curve.json
-        let var_path = Path::new("/var/lib/system76-power/fan_curve.json");
-        daemon.fan_daemon.save_fan_curve(var_path)
-            .map_err(zbus_error_from_display)
-   }
+    }
+    
+    #[dbus_interface(name = "LoadAllFanCurves")]
+    async fn load_all_fan_curves(&self) -> zbus::fdo::Result<Vec<(String, Vec<(u8, u8)>)>> {
+        let daemon = self.0.lock().await;
+        daemon.load_all_fan_curves()
+    }
     
     #[dbus_interface(out_args("curve"))]
     async fn get_fan_curve(&self) -> zbus::fdo::Result<Vec<(u8, u8)>> {

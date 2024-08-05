@@ -8,15 +8,16 @@ use clap::Parser;
 use log::LevelFilter;
 use std::process;
 use system76_power::{args::Args, client, daemon, logging};
+use anyhow::Result;
 
 mod fan;
 mod fan_curve_gui;
 use fan_curve_gui::FanCurveApp;
 
-fn main() {
+fn main() -> Result<()> {
     let args = Args::parse();
 
-    let res = match args {
+    match args {
         Args::Daemon { quiet, verbose } => {
             if let Err(why) = logging::setup(if verbose {
                 LevelFilter::Debug
@@ -30,25 +31,31 @@ fn main() {
             }
 
             if unsafe { libc::geteuid() } == 0 {
-                daemon::daemon()
+                daemon::daemon()?;
             } else {
-                Err(anyhow::anyhow!("must be run as root"))
+                return Err(anyhow::anyhow!("Daemon must be run as root"));
             }
         }
+        
         Args::Gui => {
-            let options = eframe::NativeOptions::default();
+            let native_options = eframe::NativeOptions {
+                decorated: false,
+                transparent: true,
+                min_window_size: Some(egui::vec2(320.0, 240.0)),
+                resizable: true,
+                ..Default::default()
+            };
+            
             eframe::run_native(
                 "Fan Curve Control",
-                options,
+                native_options,
                 Box::new(|cc| Box::new(FanCurveApp::new(cc)))
             );
-            Ok(())
         }
-        _ => client::client(&args),
-    };
-
-    if let Err(err) = res {
-        eprintln!("{:?}", err);
-        process::exit(1);
+        _ => {
+            client::client(&args)?;
+        }
     }
+
+    Ok(())
 }

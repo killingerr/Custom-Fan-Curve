@@ -27,7 +27,9 @@ pub enum FanDaemonError {
 
 #[derive(Serialize, Deserialize)]
 pub struct FanCurveConfig {
+    pub name: String,
     pub points : Vec<(u8, u8)>,
+    pub is_default: bool,
 }
 
 pub struct FanDaemon {
@@ -56,7 +58,15 @@ impl FanDaemon {
             nvidia_exists,
             displayed_warning: Cell::new(false),
         };
-
+        
+        //Attempt to load the default fan curve from disk, if available
+        let default_path = Path::new("/etc/system76-power/fan_curves/default.json");
+        if default_path.exists() {
+            if let Err(err) = daemon.load_fan_curve(default_path) {
+                log::error!("failed to load default fan curve: {}", err)
+            }
+        }
+        
         if let Err(err) = daemon.discover() {
             log::error!("fan daemon: {}", err);
         }
@@ -64,8 +74,11 @@ impl FanDaemon {
         daemon
     }
     
-    pub fn set_fan_curve(&mut self, curve: Vec<(u8, u8)>) -> Result<(), String> {
-        let mut new_curve = FanCurve::new("Custom".to_string());
+    pub fn set_fan_curve(&mut self, name: Option<String>, curve: Vec<(u8, u8)>, set_as_default: bool) -> Result<(), String> {
+        let curve_name = name.unwrap_or_else(|| "Custom".to_string());
+        let file_name = format!("{}.json", curve_name.replace(" ", "_").to_lowercase());
+        let save_path = Path::new("/etc/system76-power/fan_curves").join(file_name);
+        let mut new_curve = FanCurve::new(curve_name.clone());
         
         for (temp, duty) in curve {
             // Convert temperature from Celsius to the internal representation (hundredths of a degree)
@@ -93,20 +106,30 @@ impl FanDaemon {
         self.step();
         
         // Save the curve after setting it
-        if let Err(e) = self.save_fan_curve(Path::new("/etc/system76-power/fan_curve.json")) {
+        if let Err(e) = self.save_fan_curve(&save_path, curve_name.clone()) {
             log::warn!("Failed to save fan curve: {}", e);
+        }
+        
+        //If set_default is true, save this curve as the default
+        if set_as_default {
+            let default_path = Path::new("/etc/system76-power/fan_curves/default.json");
+            if let Err(e) = self.save_fan_curve(default_path, curve_name.clone()) {
+                log::warn!("Failed to save default fan curve: {}", e);
+            }
         }
 
         Ok(())
     }
     
-    pub fn save_fan_curve(&self, path: &Path) -> std::io::Result<()> {
+    pub fn save_fan_curve(&self, path: &Path, name: String) -> std::io::Result<()> {
         let config = FanCurveConfig {
+            name: name.to_string(),
             points: self.curve.points().iter().map(|p| ((p.temp / 100) as u8, (p.duty / 100)as u8)).collect(),
+            is_default:  false,
         };
         let json = serde_json::to_string_pretty(&config)?;
         
-        info!("Attempting to save fan curve to {:?}", path);
+        info!("Attempting to save fan curve '{}' to {:?}", config.name, path);
         
         //Create parent directory if it doesn't exist
         if let Some(parent) = path.parent() {
@@ -138,7 +161,7 @@ impl FanDaemon {
     pub fn load_fan_curve(&mut self, path: &Path) -> std::io::Result<()> {
         let json = fs::read_to_string(path)?;
         let config: FanCurveConfig = serde_json::from_str(&json)?;
-        self.set_fan_curve(config.points)
+        self.set_fan_curve(Some(config.name), config.points, config.is_default)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }
 
@@ -311,6 +334,7 @@ impl FanPoint {
 pub struct FanCurve {
     pub name: String,
     pub points: Vec<FanPoint>,
+    pub is_default: bool,
 }
 
 impl FanCurve {
@@ -318,6 +342,7 @@ impl FanCurve {
         Self {
             name,
             points: Vec::new(),
+            is_default: false,
          }
      }
      
@@ -348,7 +373,7 @@ impl FanCurve {
      pub fn is_empty(&self) -> bool {
          self.points.is_empty()
      }
-
+    
             
     /// Adds a point to the fan curve
     #[must_use]
