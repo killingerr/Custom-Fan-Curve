@@ -1,10 +1,11 @@
 use eframe::egui;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::runtime::Builder;
 use system76_power_zbus::PowerDaemonProxy;
 use zbus::Connection;
 use crate::fan::{FanCurve, FanPoint};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
+use std::fs;
 
 #[cfg(target_os = "windows")]
 use winapi::um::winuser::{FindWindowA, ShowWindow, SW_MINIMIZE};
@@ -12,6 +13,8 @@ use winapi::um::winuser::{FindWindowA, ShowWindow, SW_MINIMIZE};
 use x11rb::connection::Connection as X11Connection;
 #[cfg(target_os = "linux")]
 use x11rb::protocol::xproto::*;
+
+const DEFAULT_CURVE_FILE: &str = "/etc/system76-power/default_fan_curve";
 
 pub struct FanCurveApp {
     fan_curves: Vec<FanCurve>,
@@ -21,6 +24,7 @@ pub struct FanCurveApp {
     runtime: tokio::runtime::Runtime,
     show_save_dialog: bool,
     default_curve_index: Option<usize>,
+    set_default_status: Arc<Mutex<Option<String>>>,
 
 }
 
@@ -35,8 +39,8 @@ impl FanCurveApp {
             .enable_all()
             .build()
             .expect("Failed to create Tokio runtime");
-
-        let (client, fan_curves) = runtime.block_on(async {
+    
+        let (client, fan_curves, current_curve_index, default_curve_index) = runtime.block_on(async {
             let connection = Connection::system().await.expect("Failed to connect to system bus");
             let client = PowerDaemonProxy::new(&connection).await.expect("Failed to create PowerDaemonProxy");
             let current_curve = client.get_fan_curve().await.unwrap_or_default();
@@ -51,30 +55,28 @@ impl FanCurveApp {
             // Load saved fan curves
             match client.load_all_fan_curves().await {
                 Ok(saved_curves) => {
-                    debug!("Saved curves received: {}", saved_curves.len());
                     for (name, points) in saved_curves {
-                        debug!("Processing curve: {} with {} points", name, points.len());
                         if !fan_curves.iter().any(|c| c.name() == name) {
-                            let mut new_curve = FanCurve::new(name.clone());
+                            let mut new_curve = FanCurve::new(name);
                             for (temp, duty) in points {
                                 new_curve.add_point(i16::from(temp) * 100, u16::from(duty) * 100);
                             }
                             fan_curves.push(new_curve);
-                            debug!("Added new curve: {}", name);
-                        } else {
-                            debug!("Skipped duplicate curve: {}", name);
-                        }   
+                        }
                     }
                 },
-                Err(e) => eprintln!("Failed to load saved fan curves: {}", e),
+                Err(e) => error!("Failed to load custom profiles: {}", e),
             }
-            
+    
+            // Add debug logging
+            debug!("Loaded {} custom profiles", fan_curves.len() - 4); // Subtract 4 for the default curves
+    
             // Convert current_curve to Vec<FanPoint> for comparison
             let current_fan_points: Vec<FanPoint> = current_curve
                 .into_iter()
                 .map(|(temp, duty)| FanPoint::new(temp as i16, duty as u16))
-                .collect(); 
-            
+                .collect();
+    
             // Add the current curve if it doesn't match any predefined curves
             if !fan_curves.iter().any(|curve| curve.points() == current_fan_points.as_slice()) {
                 let mut new_curve = FanCurve::new("Current".to_string());
@@ -84,9 +86,49 @@ impl FanCurveApp {
                 fan_curves.push(new_curve);
             }
             
-            (Arc::new(client), fan_curves)
+            // Load the default curve name
+            let default_curve_name = match fs::read_to_string(DEFAULT_CURVE_FILE) {
+                Ok(name) => {
+                    info!("Loaded default curve name: {}", name.trim());
+                    Some(name.trim().to_string())
+                },
+                Err(e) => {
+                    warn!("Failed to load default curve name: {}", e);
+                    None
+                }
+            };
+    
+            let default_curve_index = default_curve_name.as_ref().and_then(|name| {
+                fan_curves.iter().position(|curve| curve.name() == name)
+            });
+            
+            // If a default curve is found, move it to the front of the list
+            let current_curve_index = if let Some(index) = default_curve_index {
+                let default_curve = fan_curves.remove(index);
+                fan_curves.insert(0, default_curve);
+                info!("Moved default curve to front of list");
+                0
+            } else {
+                0 // Start with the first curve if no default is found
+            };
+    
+            // Apply the default curve
+            let default_curve = fan_curves[current_curve_index].clone();
+            let curve_points: Vec<(u8, u8)> = default_curve.points()
+                .iter()
+                .map(|point| ((point.temp / 100) as u8, (point.duty / 100) as u8))
+                .collect();
+    
+            let default_curve_name = default_curve.name().to_string();
+            if let Err(e) = client.set_fan_curve(&curve_points).await {
+                error!("Failed to apply default curve '{}' on startup: {}", default_curve_name, e);
+            } else {
+                info!("Applied default curve '{}' on startup", default_curve_name);
+            }
+    
+            (Arc::new(client), fan_curves, current_curve_index, default_curve_index)
         });
-        
+    
         // Debug logging
         info!("Loaded fan curves:");
         for (i, curve) in fan_curves.iter().enumerate() {
@@ -98,18 +140,19 @@ impl FanCurveApp {
         
         Self {
             fan_curves,
-            current_curve_index: 0,
+            current_curve_index,
             new_curve_name: String::new(),
             client,
             runtime,
             show_save_dialog: false,
-            default_curve_index: None,
+            default_curve_index,
+            set_default_status: Arc::new(Mutex::new(None)),
         }
     }
 
     fn set_default_curve(&mut self) {
         let current_index = self.current_curve_index;
-        if let Some(curve) = self.fan_curves.get(current_index) {
+        if let Some(curve) = self.fan_curves.get(current_index).cloned() {
             let curve_name = curve.name().to_string();
             let curve_points: Vec<(u8, u8)> = curve.points()
                 .iter()
@@ -117,15 +160,29 @@ impl FanCurveApp {
                 .collect();
 
             let client = self.client.clone();
+            let status = self.set_default_status.clone();
             self.runtime.spawn(async move {
                 match client.set_fan_curve_persistent(&curve_name, &curve_points).await {
                     Ok(_) => {
-                        info!("Set '{}' as the default fan curve", curve_name);
+                        if let Err(e) = fs::write(DEFAULT_CURVE_FILE, &curve_name) {
+                            error!("Failed to save default curve name: {}", e);
+                            let mut status = status.lock().unwrap();
+                            *status = Some(format!("Error saving default: {}", e));
+                        } else {
+                            info!("Set '{}' as the default fan curve", curve_name);
+                            let mut status = status.lock().unwrap();
+                            *status = Some(format!("'{}' set as default", curve_name));
+                        }
                     },
-                    Err(e) => error!("Failed to set default fan curve: {}", e),
+                    Err(e) => {
+                        error!("Failed to set default fan curve: {}", e);
+                        let mut status = status.lock().unwrap();
+                        *status = Some(format!("Error: {}", e));
+                    },
                 }
             });
 
+            // Update the current state
             self.default_curve_index = Some(current_index);
         }
     }
@@ -232,65 +289,40 @@ impl eframe::App for FanCurveApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let title_bar_height = 32.0;
-            let mut title_bar_rect = ui.max_rect();
-            title_bar_rect.max.y = title_bar_rect.min.y + title_bar_height;
-            let title_bar_response = ui.allocate_rect(title_bar_rect, egui::Sense::click_and_drag());
+            let title_bar_rect = egui::Rect::from_min_size(
+                ui.min_rect().min,
+                egui::vec2(ui.available_width(), title_bar_height),
+            );
 
-            if title_bar_response.dragged() && !title_bar_response.clicked() {
+            // Title bar
+            ui.painter().rect_filled(title_bar_rect, 0.0, egui::Color32::from_rgb(60, 60, 60));
+            ui.allocate_ui_at_rect(title_bar_rect, |ui| {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new("Fan Curve Control").color(egui::Color32::WHITE));
+                });
+            });
+
+            // Make the title bar draggable
+            let title_bar_response = ui.interact(title_bar_rect, egui::Id::new("title_bar"), egui::Sense::drag());
+            if title_bar_response.dragged() {
                 frame.drag_window();
             }
 
-            // Draw title bar
-            ui.painter().rect_filled(title_bar_rect, 0.0, egui::Color32::from_rgb(60, 60, 60));
-            
-            // Title
-            ui.painter().text(
-                title_bar_rect.left_center() + egui::vec2(10.0, 0.0),
-                egui::Align2::LEFT_CENTER,
-                "Fan Curve Control",
-                egui::FontId::proportional(18.0),
-                egui::Color32::WHITE,
-            );
-
             // Window control buttons
-            let button_size = egui::vec2(title_bar_height, title_bar_height);
-            let button_margin = 2.0;
-
-            // Close button
-            let close_rect = egui::Rect::from_min_size(
-                egui::pos2(title_bar_rect.right() - button_size.x, title_bar_rect.top()),
-                button_size
-            );
-            let close_response = ui.allocate_rect(close_rect, egui::Sense::click());
-            if close_response.clicked() {
-                frame.close();
-            }
-            ui.painter().rect_filled(close_rect, 0.0, egui::Color32::from_rgb(200, 80, 80));
-            ui.painter().text(close_rect.center(), egui::Align2::CENTER_CENTER, "X", egui::FontId::proportional(16.0), egui::Color32::WHITE);
-
-            // Maximize button
-            let maximize_rect = egui::Rect::from_min_size(
-                egui::pos2(close_rect.left() - button_size.x - button_margin, title_bar_rect.top()),
-                button_size
-            );
-            let maximize_response = ui.allocate_rect(maximize_rect, egui::Sense::click());
-            if maximize_response.clicked() {
-                frame.set_fullscreen(!frame.info().window_info.fullscreen);
-            }
-            ui.painter().rect_filled(maximize_rect, 0.0, egui::Color32::from_rgb(80, 80, 80));
-            ui.painter().text(maximize_rect.center(), egui::Align2::CENTER_CENTER, "□", egui::FontId::proportional(16.0), egui::Color32::WHITE);
-
-            // Minimize button
-            let minimize_rect = egui::Rect::from_min_size(
-                egui::pos2(maximize_rect.left() - button_size.x - button_margin, title_bar_rect.top()),
-                button_size
-            );
-            let minimize_response = ui.allocate_rect(minimize_rect, egui::Sense::click());
-            if minimize_response.clicked() {
-                self.minimize_window();
-            }
-            ui.painter().rect_filled(minimize_rect, 0.0, egui::Color32::from_rgb(80, 80, 80));
-            ui.painter().text(minimize_rect.center(), egui::Align2::CENTER_CENTER, "_", egui::FontId::proportional(16.0), egui::Color32::WHITE);
+            ui.allocate_ui_at_rect(title_bar_rect, |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("✕").clicked() {
+                        frame.close();
+                    }
+                    if ui.button("□").clicked() {
+                        frame.set_fullscreen(!frame.info().window_info.fullscreen);
+                    }
+                    if ui.button("_").clicked() {
+                        self.minimize_window();
+                    }
+                });
+            });
+           
 
             // Main content
             egui::Frame::none()
@@ -369,7 +401,7 @@ impl eframe::App for FanCurveApp {
                 
                     // Apply changes and Save curve
                     ui.horizontal(|ui| {
-                        if ui.button("Apply Changes").clicked() {
+                        if ui.button("Apply Curve").clicked() {
                             let client = self.client.clone();
                             let fan_curve = self.fan_curves[self.current_curve_index].clone();
                             self.runtime.spawn(async move {
@@ -389,9 +421,19 @@ impl eframe::App for FanCurveApp {
                         }
                     });
                     
-                    // Add "Set as Default" button
-                    if ui.button("Set as Default").clicked() {
+                    //
+                    let set_default_button = ui.add_enabled(
+                        Some(self.current_curve_index) != self.default_curve_index,
+                        egui::Button::new("Set as default")
+                    );
+                    
+                    if set_default_button.clicked() {
                         self.set_default_curve();
+                    }
+                    
+                    // Display status message
+                    if let Some(status) = self.set_default_status.lock().unwrap().as_ref() {
+                        ui.label(status);
                     }
                     
                 });
