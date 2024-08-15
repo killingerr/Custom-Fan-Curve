@@ -153,15 +153,22 @@ impl PowerDaemon {
                                 match self.load_fan_curve_from_file(&entry.path()) {
                                     Ok(curve) => {
                                         debug!("Loaded curve: {} with {} points", curve.name, curve.points.len());
-                                        curves.push((
-                                            curve.name,
-                                            curve.points
-                                        ));
+                                        if curves.iter().any(|(name, _)| name == &curve.name) {
+                                            debug!("Skipping duplicate curve: {}", curve.name);
+                                        } else {
+                                            curves.push((
+                                                curve.name.clone(),
+                                                curve.points
+                                            ));
+                                            debug!("Added curve: {} to the list", curve.name);
+                                        }
                                     },
                                     Err(e) => {
                                         error!("Failed to load curve from file {}: {}", file_name, e);
                                     }
                                 }
+                            } else {
+                                debug!("Skipping non-JSON file: {}", file_name);
                             }
                         }
                     }
@@ -173,8 +180,11 @@ impl PowerDaemon {
     }
 
     debug!("Total curves loaded: {}", curves.len());
+    for (index, (name, points)) in curves.iter().enumerate() {
+        debug!("Curve {}: {} with {} points", index + 1, name, points.len());
+    }
     Ok(curves)
-  }
+}
 
 }
 

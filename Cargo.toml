@@ -15,6 +15,8 @@ serde = { version = "1.0", features = ["derive"] }
 anyhow = "1.0.82"
 clap = { version = "4.5.4", features = ["derive"] }
 concat-in-place = "1.1.0"
+eframe = "0.19.0"
+egui = "0.19.0"
 fern = "0.6"
 futures-lite = "2.3.0"
 hidapi = "1.5"
@@ -27,12 +29,17 @@ serde_json = "1.0"
 serde.workspace = true
 sysfs-class = { git = "https://github.com/pop-os/sysfs-class" }
 system76-power-zbus = { path = "zbus" }
+tempfile = "3.2"
 thiserror = "1.0"
 tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "time", "signal"] }
 zbus = { version = "3.15.2", default-features = false, features = [ "tokio"] }
 zbus_polkit = { version = "3.0.0", features = ["tokio"] }
 zvariant = "3.15.2"
-eframe = "0.19.0"
-egui = "0.19.0"
-tempfile = "3.2"
 
+
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3", features = ["winuser"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = "0.9.0"

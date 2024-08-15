@@ -72,8 +72,11 @@ trait PowerDaemon {
     /// SetFanCurve method
     fn set_fan_curve(&self, curve: &[(u8, u8)]) -> zbus::Result<()>;
     
-    ///SetFanCurvePersistent
-    fn set_fan_curve_persistent(&self, curve: &[(u8, u8)]) -> zbus::Result<()>;
+    /// SetFanCurvePersistent
+    fn set_fan_curve_persistent(&self, name: &str, curve: &[(u8, u8)]) -> zbus::Result<()>;
+    
+    // LoadAllFanCurves
+    fn load_all_fan_curves(&self) -> zbus::Result<Vec<(String, Vec<(u8, u8)>)>>;
 
     /// HotPlugDetect signal
     #[dbus_proxy(signal)]

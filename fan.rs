@@ -127,6 +127,7 @@ impl FanDaemon {
             points: self.curve.points().iter().map(|p| ((p.temp / 100) as u8, (p.duty / 100)as u8)).collect(),
             is_default:  false,
         };
+        
         let json = serde_json::to_string_pretty(&config)?;
         
         info!("Attempting to save fan curve '{}' to {:?}", config.name, path);
