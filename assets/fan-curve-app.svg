@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="fanGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4A90E2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#2E5BBA;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="tempGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#50C878;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#FFD700;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#FF6B6B;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="32" cy="32" r="30" fill="#F5F5F5" stroke="#E0E0E0" stroke-width="2"/>
+  
+  <!-- Fan blades -->
+  <g transform="translate(32,32)">
+    <!-- Blade 1 -->
+    <ellipse cx="0" cy="-12" rx="3" ry="12" fill="url(#fanGradient)" transform="rotate(0)"/>
+    <!-- Blade 2 -->
+    <ellipse cx="0" cy="-12" rx="3" ry="12" fill="url(#fanGradient)" transform="rotate(120)"/>
+    <!-- Blade 3 -->
+    <ellipse cx="0" cy="-12" rx="3" ry="12" fill="url(#fanGradient)" transform="rotate(240)"/>
+  </g>
+  
+  <!-- Center hub -->
+  <circle cx="32" cy="32" r="6" fill="#2C3E50"/>
+  
+  <!-- Temperature indicator -->
+  <rect x="20" y="45" width="24" height="8" rx="4" fill="url(#tempGradient)"/>
+  <rect x="22" y="47" width="20" height="4" rx="2" fill="white" opacity="0.8"/>
+  
+  <!-- Temperature text -->
+  <text x="32" y="52" font-family="Arial, sans-serif" font-size="8" font-weight="bold" text-anchor="middle" fill="#2C3E50">TEMP</text>
+</svg>
