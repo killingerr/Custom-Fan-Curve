@@ -1,5 +1,5 @@
 //! Fan Curve Control Application
-//! 
+//!
 //! A System76 Power-compatible fan curve management application with GUI and DBus interfaces.
 
 pub mod args;
@@ -17,5 +17,5 @@ pub const DBUS_OBJECT_PATH: &str = "/com/system76/FanCurveDaemon";
 pub const DBUS_INTERFACE_NAME: &str = "com.system76.FanCurveDaemon";
 
 // Re-export commonly used types
-pub use fan::{FanCurve, FanPoint, FanCurveConfig};
 pub use errors::{FanCurveError, Result};
+pub use fan::{FanCurve, FanCurveConfig, FanPoint};

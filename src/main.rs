@@ -1,8 +1,10 @@
 //! Main entry point for the fan curve application
 
-use fan_curve_app::{args::Args, client::FanCurveClient, daemon::FanCurveDaemon, fan_curve_gui::FanCurveApp, logging};
-use eframe::egui;
 use clap::Parser;
+use eframe::egui;
+use fan_curve_app::{
+    args::Args, client::FanCurveClient, daemon::FanCurveDaemon, fan_curve_gui::FanCurveApp, logging,
+};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -19,14 +21,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Handle daemon mode
     if let Some(fan_curve_app::args::Commands::Daemon) = args.command {
-        let daemon = FanCurveDaemon::new().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-        daemon.run().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        let daemon =
+            FanCurveDaemon::new().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        daemon
+            .run()
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
         return Ok(());
     }
 
     // Handle client mode
-    let client = FanCurveClient::new().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-    client.handle_args(args).await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+    let client = FanCurveClient::new()
+        .await
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+    client
+        .handle_args(args)
+        .await
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
     Ok(())
 }
@@ -41,10 +52,10 @@ fn run_gui() -> Result<(), eframe::Error> {
             .with_title("Fan Curve Control"),
         ..Default::default()
     };
-    
+
     eframe::run_native(
         "Fan Curve Control",
         native_options,
-        Box::new(|cc| Ok(Box::new(FanCurveApp::new(cc))))
+        Box::new(|cc| Ok(Box::new(FanCurveApp::new(cc)))),
     )
 }

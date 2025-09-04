@@ -1,7 +1,7 @@
 //! Daemon implementation for the fan curve application
 
 use crate::{
-    errors::{FanCurveError, Result, zbus_error_from_display},
+    errors::{zbus_error_from_display, FanCurveError, Result},
     fan::{FanCurve, FanCurveConfig},
     DBUS_OBJECT_PATH, DBUS_SERVICE_NAME,
 };
@@ -36,8 +36,9 @@ impl FanCurveDaemon {
                 .map_err(|e| FanCurveError::Config(format!("Failed to load config: {}", e)))
         } else {
             let config = FanCurveConfig::new();
-            config.save_to_file(&config_path)
-                .map_err(|e| FanCurveError::Config(format!("Failed to save default config: {}", e)))?;
+            config.save_to_file(&config_path).map_err(|e| {
+                FanCurveError::Config(format!("Failed to save default config: {}", e))
+            })?;
             Ok(config)
         }
     }
@@ -47,10 +48,10 @@ impl FanCurveDaemon {
         let config = self.config.lock().unwrap();
         let config_path = FanCurveConfig::get_config_path();
         if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| FanCurveError::Io(e))?;
+            std::fs::create_dir_all(parent).map_err(FanCurveError::Io)?;
         }
-        config.save_to_file(&config_path)
+        config
+            .save_to_file(&config_path)
             .map_err(|e| FanCurveError::Config(format!("Failed to save config: {}", e)))
     }
 
@@ -95,7 +96,7 @@ impl FanCurveDaemon {
         debug!("Setting fan curve to index {}", index);
         let mut current_index = self.current_curve_index.lock().unwrap();
         let config = self.config.lock().unwrap();
-        
+
         if index as usize >= config.curves.len() {
             return Err(zbus_error_from_display("Invalid fan curve index"));
         }
@@ -109,14 +110,17 @@ impl FanCurveDaemon {
     async fn set_fan_curve_by_name(&self, name: &str) -> zbus::fdo::Result<()> {
         debug!("Setting fan curve to name: {}", name);
         let config = self.config.lock().unwrap();
-        
+
         if let Some(index) = config.curves.iter().position(|c| c.name() == name) {
             let mut current_index = self.current_curve_index.lock().unwrap();
             *current_index = index;
             info!("Fan curve set to: {}", name);
             Ok(())
         } else {
-            Err(zbus_error_from_display(format!("Fan curve not found: {}", name)))
+            Err(zbus_error_from_display(format!(
+                "Fan curve not found: {}",
+                name
+            )))
         }
     }
 
@@ -124,43 +128,52 @@ impl FanCurveDaemon {
     async fn set_default_fan_curve(&self, name: &str) -> zbus::fdo::Result<()> {
         debug!("Setting default fan curve to: {}", name);
         let mut config = self.config.lock().unwrap();
-        
+
         if let Some(index) = config.curves.iter().position(|c| c.name() == name) {
             config.default_curve_index = Some(index);
             drop(config);
-            
+
             if let Err(e) = self.save_config_internal() {
                 error!("Failed to save config: {}", e);
-                return Err(zbus_error_from_display(format!("Failed to save config: {}", e)));
+                return Err(zbus_error_from_display(format!(
+                    "Failed to save config: {}",
+                    e
+                )));
             }
-            
+
             info!("Default fan curve set to: {}", name);
             Ok(())
         } else {
-            Err(zbus_error_from_display(format!("Fan curve not found: {}", name)))
+            Err(zbus_error_from_display(format!(
+                "Fan curve not found: {}",
+                name
+            )))
         }
     }
 
     /// Add a fan curve point
     async fn add_fan_curve_point(&self, temp: i16, duty: u16) -> zbus::fdo::Result<()> {
         debug!("Adding fan curve point: {}°C -> {}%", temp, duty);
-        
-        if temp < 0 || temp > 100 || duty > 100 {
+
+        if !(0..=100).contains(&temp) || duty > 100 {
             return Err(zbus_error_from_display("Invalid fan curve point values"));
         }
 
         let mut config = self.config.lock().unwrap();
         let current_index = self.current_curve_index.lock().unwrap();
-        
+
         if *current_index < config.curves.len() {
             config.curves[*current_index].add_point(temp, duty);
             drop(config);
-            
+
             if let Err(e) = self.save_config_internal() {
                 error!("Failed to save config: {}", e);
-                return Err(zbus_error_from_display(format!("Failed to save config: {}", e)));
+                return Err(zbus_error_from_display(format!(
+                    "Failed to save config: {}",
+                    e
+                )));
             }
-            
+
             info!("Added fan curve point: {}°C -> {}%", temp, duty);
             Ok(())
         } else {
@@ -171,19 +184,22 @@ impl FanCurveDaemon {
     /// Remove last fan curve point
     async fn remove_fan_curve_point(&self) -> zbus::fdo::Result<()> {
         debug!("Removing last fan curve point");
-        
+
         let mut config = self.config.lock().unwrap();
         let current_index = self.current_curve_index.lock().unwrap();
-        
+
         if *current_index < config.curves.len() {
             if let Some(_point) = config.curves[*current_index].remove_last_point() {
                 drop(config);
-                
+
                 if let Err(e) = self.save_config_internal() {
                     error!("Failed to save config: {}", e);
-                    return Err(zbus_error_from_display(format!("Failed to save config: {}", e)));
+                    return Err(zbus_error_from_display(format!(
+                        "Failed to save config: {}",
+                        e
+                    )));
                 }
-                
+
                 info!("Removed last fan curve point");
                 Ok(())
             } else {
@@ -197,12 +213,15 @@ impl FanCurveDaemon {
     /// Save configuration
     async fn save_config(&self) -> zbus::fdo::Result<()> {
         debug!("Saving configuration");
-        
+
         if let Err(e) = self.save_config_internal() {
             error!("Failed to save config: {}", e);
-            return Err(zbus_error_from_display(format!("Failed to save config: {}", e)));
+            return Err(zbus_error_from_display(format!(
+                "Failed to save config: {}",
+                e
+            )));
         }
-        
+
         info!("Configuration saved");
         Ok(())
     }

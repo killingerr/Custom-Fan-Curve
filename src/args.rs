@@ -3,7 +3,7 @@
 use clap::{Parser, Subcommand};
 
 /// Fan Curve Control Application
-/// 
+///
 /// A System76 Power-compatible fan curve management application with GUI and DBus interfaces.
 #[derive(Parser)]
 #[command(name = "fan-curve-app")]

@@ -1,7 +1,7 @@
-use serde::{Serialize, Deserialize};
+use crate::errors::Result;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use crate::errors::{FanCurveError, Result};
 use zvariant::Type;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -87,20 +87,20 @@ impl FanCurve {
         for i in 0..self.points.len() - 1 {
             let point1 = &self.points[i];
             let point2 = &self.points[i + 1];
-            
+
             if temperature >= point1.temp as f32 && temperature <= point2.temp as f32 {
                 // Linear interpolation between the two points
                 let temp1 = point1.temp as f32;
                 let temp2 = point2.temp as f32;
                 let duty1 = point1.duty as f32;
                 let duty2 = point2.duty as f32;
-                
+
                 // Calculate the interpolation factor
                 let factor = (temperature - temp1) / (temp2 - temp1);
-                
+
                 // Interpolate the duty
                 let interpolated_duty = duty1 + factor * (duty2 - duty1);
-                
+
                 return interpolated_duty.round() as u16;
             }
         }
@@ -215,7 +215,15 @@ impl FanCurveConfig {
 
     pub fn get_config_path() -> std::path::PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        std::path::PathBuf::from(home).join(".fan_curve_app").join("config.json")
+        std::path::PathBuf::from(home)
+            .join(".fan_curve_app")
+            .join("config.json")
+    }
+}
+
+impl Default for FanCurveConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -226,17 +234,17 @@ mod tests {
     #[test]
     fn test_fan_curve_interpolation() {
         let curve = FanCurve::standard();
-        
+
         // Test exact points
         assert_eq!(curve.calculate_duty_for_temperature(0.0), 0);
         assert_eq!(curve.calculate_duty_for_temperature(30.0), 20);
         assert_eq!(curve.calculate_duty_for_temperature(70.0), 60);
         assert_eq!(curve.calculate_duty_for_temperature(100.0), 100);
-        
+
         // Test interpolation between points
         assert_eq!(curve.calculate_duty_for_temperature(35.0), 25); // Between 30°C(20%) and 40°C(30%)
         assert_eq!(curve.calculate_duty_for_temperature(65.0), 55); // Between 60°C(50%) and 70°C(60%)
-        
+
         // Test edge cases
         assert_eq!(curve.calculate_duty_for_temperature(-10.0), 0); // Below minimum
         assert_eq!(curve.calculate_duty_for_temperature(150.0), 100); // Above maximum
