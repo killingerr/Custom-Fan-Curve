@@ -1,0 +1,51 @@
+{
+  "name": "fan-curve-app",
+  "version": "1.0.0",
+  "description": "A modern Rust-based application for managing CPU fan curves on System76 laptops",
+  "main": "index.js",
+  "scripts": {
+    "install": "./install.sh",
+    "build": "cargo build --release",
+    "run": "cargo run -- --gui",
+    "test": "cargo test",
+    "clean": "cargo clean"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/fan-curve-app.git"
+  },
+  "keywords": [
+    "fan",
+    "curve",
+    "system76",
+    "temperature",
+    "hardware",
+    "rust",
+    "gui"
+  ],
+  "author": "Tony <tony@example.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/yourusername/fan-curve-app/issues"
+  },
+  "homepage": "https://github.com/yourusername/fan-curve-app#readme",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "bin": {
+    "fan-curve": "./target/release/fan-curve-app"
+  },
+  "files": [
+    "target/release/fan-curve-app",
+    "install.sh",
+    "README.md",
+    "LICENSE"
+  ]
+}
