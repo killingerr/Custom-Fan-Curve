@@ -168,6 +168,12 @@ impl FanMonitor {
         }
 
         let data = self.get_current_fan_data().await?;
+        
+        // Apply fan curve to hardware
+        if let Err(e) = self.apply_fan_curve(data.temperature) {
+            warn!("Failed to apply fan curve: {}", e);
+        }
+        
         self.last_log_time = Instant::now();
 
         // Real-time console output with formatting
@@ -305,6 +311,30 @@ impl FanMonitor {
             let duty = ((temperature - 30.0).max(0.0) * 2.0) as u16;
             duty.min(100)
         }
+    }
+
+    /// Apply fan curve to hardware (set PWM duty)
+    pub fn apply_fan_curve(&self, temperature: f32) -> Result<()> {
+        if !self.fan_detector.is_initialized() {
+            warn!("Fan detector not initialized, cannot apply fan curve");
+            return Ok(());
+        }
+
+        let duty_percentage = self.calculate_fan_duty_from_curve(temperature);
+        
+        // Convert percentage (0-100) to PWM value (0-255)
+        let pwm_value = ((duty_percentage as f32 / 100.0) * 255.0).round() as u8;
+        
+        info!("Applying fan curve: {:.1}°C -> {}% duty -> PWM {}", temperature, duty_percentage, pwm_value);
+        
+        // Apply to CPU fan if available
+        if let Some(cpu_fan) = self.fan_detector.get_cpu_fan() {
+            self.fan_detector.set_fan_pwm(cpu_fan.fan_number, pwm_value)?;
+        } else {
+            warn!("No CPU fan found for PWM control");
+        }
+        
+        Ok(())
     }
 
     /// Read CPU usage from /proc/stat

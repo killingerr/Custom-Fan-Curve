@@ -72,9 +72,9 @@ impl FanDetector {
                         let name = name_content.trim();
                         info!("Checking hwmon device: {} -> '{}'", path.display(), name);
                         
-                        if name == "system76_thelio_io" {
+                        if name == "system76_thelio_io" || name == "system76" {
                             self.hwmon_path = Some(path.to_string_lossy().to_string());
-                            info!("Found System76 Thelio IO sensor at: {}", path.display());
+                            info!("Found System76 sensor '{}' at: {}", name, path.display());
                             return Ok(());
                         }
                     }
@@ -216,6 +216,31 @@ impl FanDetector {
     /// Get the number of detected fans
     pub fn fan_count(&self) -> usize {
         self.fans.len()
+    }
+
+    /// Set fan PWM duty (0-255, where 255 = 100%)
+    pub fn set_fan_pwm(&self, fan_number: u8, duty: u8) -> Result<()> {
+        if let Some(fan) = self.fans.iter().find(|f| f.fan_number == fan_number) {
+            let pwm_path = Path::new(&fan.hwmon_path).join(format!("pwm{}", fan_number));
+            let pwm_enable_path = Path::new(&fan.hwmon_path).join(format!("pwm{}_enable", fan_number));
+            
+            info!("Setting fan {} PWM to {} (duty: {})", fan_number, duty, duty);
+            
+            // Enable PWM control (1 = manual control, 2 = automatic)
+            fs::write(&pwm_enable_path, "1")
+                .map_err(|e| crate::errors::FanCurveError::Io(e))?;
+            
+            // Set PWM duty (0-255)
+            fs::write(&pwm_path, duty.to_string())
+                .map_err(|e| crate::errors::FanCurveError::Io(e))?;
+            
+            info!("Fan {} PWM set to {} at {}", fan_number, duty, pwm_path.display());
+            Ok(())
+        } else {
+            Err(crate::errors::FanCurveError::Config(
+                format!("Fan {} not found for PWM control", fan_number)
+            ))
+        }
     }
 }
 
