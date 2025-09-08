@@ -110,7 +110,7 @@ impl FanDetector {
                     let fan_label = label_content.trim().to_string();
                     info!("Found fan{}_label: '{}'", fan_number, fan_label);
                     
-                    if fan_label == "CPU Fan" {
+                    if fan_label == "CPU Fan" || fan_label == "CPU fan" || fan_label.to_lowercase().contains("cpu") {
                         info!("Found CPU Fan at fan{}! Using fan{}_input for data", fan_number, fan_number);
                         
                         let fan_sensor = FanSensor {
