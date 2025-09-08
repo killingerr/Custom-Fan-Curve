@@ -335,7 +335,7 @@ impl FanMonitor {
         }
     }
 
-    /// Apply fan curve to hardware via System76 Power DBus interface
+    /// Apply fan curve to hardware via System76 Power DBus interface and direct PWM control
     pub async fn apply_fan_curve(&self, temperature: f32) -> Result<()> {
         if !self.fan_detector.is_initialized() {
             warn!("Fan detector not initialized, cannot apply fan curve");
@@ -346,15 +346,27 @@ impl FanMonitor {
         
         info!("Applying fan curve: {:.1}°C -> {}% duty", temperature, duty_percentage);
         
-        // Try to use System76 Power client if available
+        // Try to use System76 Power client if available (for power profiles)
         if let Some(ref client) = self.system76_power_client {
             if let Err(e) = client.apply_fan_curve(temperature, duty_percentage).await {
                 warn!("Failed to apply fan curve via System76 Power: {}", e);
-                warn!("Falling back to direct PWM control (if available)");
             }
         } else {
-            warn!("System76 Power client not initialized, cannot apply fan curve");
-            warn!("Current duty: {}% - this should be applied via System76 Power", duty_percentage);
+            warn!("System76 Power client not initialized");
+        }
+        
+        // Always try direct PWM control for precise fan control
+        // Convert percentage (0-100) to PWM value (0-255)
+        let pwm_value = ((duty_percentage as f32 / 100.0) * 255.0).round() as u8;
+        
+        // Apply to CPU fan if available
+        if let Some(cpu_fan) = self.fan_detector.get_cpu_fan() {
+            info!("Applying direct PWM control: Fan {} -> PWM {}", cpu_fan.fan_number, pwm_value);
+            if let Err(e) = self.fan_detector.set_fan_pwm(cpu_fan.fan_number, pwm_value) {
+                warn!("Failed to set fan PWM directly: {}", e);
+            }
+        } else {
+            warn!("No CPU fan found for direct PWM control");
         }
         
         Ok(())
