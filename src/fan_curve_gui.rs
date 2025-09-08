@@ -40,6 +40,13 @@ impl FanCurveApp {
             (default_config.curves, default_config.default_curve_index)
         };
 
+        let mut fan_monitor = FanMonitor::new();
+        // Initialize the fan monitor to detect CPU temperature sensor
+        if let Err(e) = fan_monitor.initialize() {
+            eprintln!("Warning: Failed to initialize CPU temperature detection: {}", e);
+            eprintln!("Falling back to simulation mode");
+        }
+
         Self {
             fan_curves,
             current_curve_index: default_curve_index.unwrap_or(0),
@@ -47,7 +54,7 @@ impl FanCurveApp {
             status_message: None,
             new_curve_name: String::new(),
             show_save_dialog: false,
-            fan_monitor: FanMonitor::new(),
+            fan_monitor,
             current_fan_data: None,
             last_fan_data_update: std::time::Instant::now(),
             show_add_point_dialog: false,
@@ -110,6 +117,32 @@ impl eframe::App for FanCurveApp {
         // Main content area
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Fan Curve Control");
+
+            // CPU manufacturer information
+            if let Some(sensor_info) = self.fan_monitor.cpu_temp_detector().get_sensor_info() {
+                ui.horizontal(|ui| {
+                    ui.label("🖥️ CPU:");
+                    ui.colored_label(
+                        match sensor_info.manufacturer {
+                            crate::cpu_temp::CpuManufacturer::Intel => egui::Color32::BLUE,
+                            crate::cpu_temp::CpuManufacturer::Amd => egui::Color32::RED,
+                            crate::cpu_temp::CpuManufacturer::Unknown => egui::Color32::GRAY,
+                        },
+                        format!("{:?}", sensor_info.manufacturer)
+                    );
+                    ui.label("|");
+                    ui.label(format!("Sensor: {}", sensor_info.sensor_name));
+                });
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label("🖥️ CPU:");
+                    ui.colored_label(egui::Color32::GRAY, "Unknown");
+                    ui.label("|");
+                    ui.colored_label(egui::Color32::YELLOW, "Temperature sensor not detected");
+                });
+            }
+
+            ui.separator();
 
             // Current fan profile display
             let current_profile = self.fan_curves[self.current_curve_index].name();

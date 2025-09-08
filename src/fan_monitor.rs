@@ -1,4 +1,5 @@
 use crate::errors::Result;
+use crate::cpu_temp::CpuTempDetector;
 use chrono::{DateTime, Local};
 use log::{info, warn};
 use rand;
@@ -23,6 +24,7 @@ pub struct FanMonitor {
     is_monitoring: bool,
     last_log_time: Instant,
     current_fan_curve: Option<crate::fan::FanCurve>,
+    cpu_temp_detector: CpuTempDetector,
 }
 
 impl FanMonitor {
@@ -33,7 +35,15 @@ impl FanMonitor {
             is_monitoring: false,
             last_log_time: Instant::now(),
             current_fan_curve: None,
+            cpu_temp_detector: CpuTempDetector::new(),
         }
+    }
+
+    /// Initialize the fan monitor (detects CPU temperature sensor)
+    pub fn initialize(&mut self) -> Result<()> {
+        self.cpu_temp_detector.initialize()?;
+        info!("Fan monitor initialized with CPU temperature detection");
+        Ok(())
     }
 
     /// Set the current fan curve for duty calculation
@@ -78,18 +88,30 @@ impl FanMonitor {
         self.is_monitoring
     }
 
-    /// Get current fan data (simulated for now)
-    pub fn get_current_fan_data_sync(&self) -> Result<FanDataPoint> {
-        // In a real implementation, this would read from:
-        // - /sys/class/thermal/thermal_zone*/temp for temperature
-        // - /sys/class/hwmon/hwmon*/fan*_input for fan speed
-        // - /proc/stat for CPU usage
+    /// Get the CPU temperature detector
+    pub fn cpu_temp_detector(&self) -> &CpuTempDetector {
+        &self.cpu_temp_detector
+    }
 
-        // For now, we'll simulate realistic data
-        let temperature = self.simulate_temperature();
-        let fan_speed = self.simulate_fan_speed(temperature);
+    /// Initialize the CPU temperature detector
+    pub fn initialize_cpu_temp(&mut self) -> Result<()> {
+        self.cpu_temp_detector.initialize()?;
+        if let Some(sensor_info) = self.cpu_temp_detector.get_sensor_info() {
+            info!(
+                "CPU temperature detector initialized for {:?} CPU",
+                sensor_info.manufacturer
+            );
+        }
+        Ok(())
+    }
+
+    /// Get current fan data
+    pub fn get_current_fan_data_sync(&self) -> Result<FanDataPoint> {
+        // Read real CPU temperature
+        let temperature = self.read_cpu_temperature()?;
+        let fan_speed = self.simulate_fan_speed(temperature); // TODO: Implement real fan speed reading
         let fan_duty = self.calculate_fan_duty_from_curve(temperature);
-        let cpu_usage = self.simulate_cpu_usage();
+        let cpu_usage = self.read_cpu_usage()?;
 
         Ok(FanDataPoint {
             timestamp: chrono::Local::now(),
@@ -100,18 +122,13 @@ impl FanMonitor {
         })
     }
 
-    /// Get current fan data (simulated for now) - async version
+    /// Get current fan data - async version
     pub async fn get_current_fan_data(&self) -> Result<FanDataPoint> {
-        // In a real implementation, this would read from:
-        // - /sys/class/thermal/thermal_zone*/temp for temperature
-        // - /sys/class/hwmon/hwmon*/fan*_input for fan speed
-        // - /proc/stat for CPU usage
-
-        // For now, we'll simulate realistic data
-        let temperature = self.simulate_temperature();
-        let fan_speed = self.simulate_fan_speed(temperature);
+        // Read real CPU temperature
+        let temperature = self.read_cpu_temperature()?;
+        let fan_speed = self.simulate_fan_speed(temperature); // TODO: Implement real fan speed reading
         let fan_duty = self.calculate_fan_duty_from_curve(temperature);
-        let cpu_usage = self.simulate_cpu_usage();
+        let cpu_usage = self.read_cpu_usage()?;
 
         Ok(FanDataPoint {
             timestamp: chrono::Local::now(),
@@ -185,11 +202,22 @@ impl FanMonitor {
         Ok(())
     }
 
-    /// Simulate temperature based on CPU usage and time
-    fn simulate_temperature(&self) -> f32 {
+    /// Read CPU temperature from hardware sensor
+    fn read_cpu_temperature(&self) -> Result<f32> {
+        if !self.cpu_temp_detector.is_initialized() {
+            // Fallback to simulation if not initialized
+            warn!("CPU temperature detector not initialized, using simulation");
+            return Ok(self.simulate_temperature_fallback());
+        }
+
+        self.cpu_temp_detector.read_temperature()
+    }
+
+    /// Fallback temperature simulation (used when hardware detection fails)
+    fn simulate_temperature_fallback(&self) -> f32 {
         let base_temp = 35.0;
         let time_factor = (chrono::Local::now().timestamp() % 60) as f32 / 60.0;
-        let cpu_factor = self.simulate_cpu_usage() * 0.5;
+        let cpu_factor = self.read_cpu_usage().unwrap_or(20.0) * 0.5;
         let random_factor = (rand::random::<f32>() - 0.5) * 5.0;
 
         base_temp + time_factor * 10.0 + cpu_factor + random_factor
@@ -215,13 +243,53 @@ impl FanMonitor {
         }
     }
 
-    /// Simulate CPU usage
-    fn simulate_cpu_usage(&self) -> f32 {
-        let base_usage = 20.0;
-        let time_factor = (chrono::Local::now().timestamp() % 30) as f32 / 30.0;
-        let random_factor = (rand::random::<f32>() - 0.5) * 30.0;
+    /// Read CPU usage from /proc/stat
+    fn read_cpu_usage(&self) -> Result<f32> {
+        let stat_content = fs::read_to_string("/proc/stat")
+            .map_err(|e| crate::errors::FanCurveError::Io(e))?;
 
-        (base_usage + time_factor * 40.0 + random_factor).clamp(0.0, 100.0)
+        let first_line = stat_content.lines().next()
+            .ok_or_else(|| crate::errors::FanCurveError::Config("Empty /proc/stat".to_string()))?;
+
+        let fields: Vec<&str> = first_line.split_whitespace().collect();
+        if fields.len() < 8 {
+            return Err(crate::errors::FanCurveError::Config("Invalid /proc/stat format".to_string()));
+        }
+
+        // Parse CPU times: user, nice, system, idle, iowait, irq, softirq, steal
+        let user: u64 = fields[1].parse()
+            .map_err(|_| crate::errors::FanCurveError::Config("Failed to parse user time".to_string()))?;
+        let nice: u64 = fields[2].parse()
+            .map_err(|_| crate::errors::FanCurveError::Config("Failed to parse nice time".to_string()))?;
+        let system: u64 = fields[3].parse()
+            .map_err(|_| crate::errors::FanCurveError::Config("Failed to parse system time".to_string()))?;
+        let idle: u64 = fields[4].parse()
+            .map_err(|_| crate::errors::FanCurveError::Config("Failed to parse idle time".to_string()))?;
+        let iowait: u64 = fields[5].parse()
+            .map_err(|_| crate::errors::FanCurveError::Config("Failed to parse iowait time".to_string()))?;
+        let irq: u64 = fields[6].parse()
+            .map_err(|_| crate::errors::FanCurveError::Config("Failed to parse irq time".to_string()))?;
+        let softirq: u64 = fields[7].parse()
+            .map_err(|_| crate::errors::FanCurveError::Config("Failed to parse softirq time".to_string()))?;
+        let steal: u64 = if fields.len() > 8 { 
+            fields[8].parse().unwrap_or(0) 
+        } else { 
+            0 
+        };
+
+        let total_idle = idle + iowait;
+        let total_non_idle = user + nice + system + irq + softirq + steal;
+        let total = total_idle + total_non_idle;
+
+        // For a single reading, we can't calculate percentage accurately
+        // This is a simplified approach - in practice, you'd want to store previous values
+        // and calculate the difference over time
+        if total == 0 {
+            return Ok(0.0);
+        }
+
+        let cpu_usage = (total_non_idle as f32 / total as f32) * 100.0;
+        Ok(cpu_usage.clamp(0.0, 100.0))
     }
 }
 

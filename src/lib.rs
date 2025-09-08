@@ -4,6 +4,7 @@
 
 pub mod args;
 pub mod client;
+pub mod cpu_temp;
 pub mod daemon;
 pub mod errors;
 pub mod fan;
