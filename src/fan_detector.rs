@@ -225,14 +225,37 @@ impl FanDetector {
             let pwm_enable_path = Path::new(&fan.hwmon_path).join(format!("pwm{}_enable", fan_number));
             
             info!("Setting fan {} PWM to {} (duty: {})", fan_number, duty, duty);
+            info!("PWM paths: enable={}, pwm={}", pwm_enable_path.display(), pwm_path.display());
+            
+            // Check if files exist and are writable
+            if !pwm_enable_path.exists() {
+                return Err(crate::errors::FanCurveError::Config(
+                    format!("PWM enable file not found: {}", pwm_enable_path.display())
+                ));
+            }
+            if !pwm_path.exists() {
+                return Err(crate::errors::FanCurveError::Config(
+                    format!("PWM file not found: {}", pwm_path.display())
+                ));
+            }
             
             // Enable PWM control (1 = manual control, 2 = automatic)
             fs::write(&pwm_enable_path, "1")
-                .map_err(|e| crate::errors::FanCurveError::Io(e))?;
+                .map_err(|e| {
+                    crate::errors::FanCurveError::Io(format!(
+                        "Failed to enable PWM control for fan {} (permission denied?): {}",
+                        fan_number, e
+                    ))
+                })?;
             
             // Set PWM duty (0-255)
             fs::write(&pwm_path, duty.to_string())
-                .map_err(|e| crate::errors::FanCurveError::Io(e))?;
+                .map_err(|e| {
+                    crate::errors::FanCurveError::Io(format!(
+                        "Failed to set PWM duty for fan {} (permission denied?): {}",
+                        fan_number, e
+                    ))
+                })?;
             
             info!("Fan {} PWM set to {} at {}", fan_number, duty, pwm_path.display());
             Ok(())
