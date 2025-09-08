@@ -383,6 +383,7 @@ pub async fn test_fan_curve(
     println!("🎯 Test started! Press Ctrl+C to stop early.\n");
 
     let mut monitor = FanMonitor::new();
+    monitor.initialize()?;
     monitor.start_monitoring(log_file)?;
 
     // Start monitoring in background

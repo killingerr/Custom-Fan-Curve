@@ -64,9 +64,9 @@ impl FanDetector {
                     if let Ok(name_content) = fs::read_to_string(&name_file) {
                         let name = name_content.trim();
                         
-                        if name == "system76_thelio_IO" {
+                        if name == "system76" {
                             self.hwmon_path = Some(path.to_string_lossy().to_string());
-                            info!("Found System76 Thelio IO sensor at: {}", path.display());
+                            info!("Found System76 sensor at: {}", path.display());
                             return Ok(());
                         }
                     }
@@ -75,15 +75,15 @@ impl FanDetector {
         }
 
         Err(crate::errors::FanCurveError::Config(
-            "System76 Thelio IO sensor not found".to_string()
+            "System76 sensor not found".to_string()
         ))
     }
 
-    /// Find all fan sensors in the Thelio IO directory
+    /// Find all fan sensors in the System76 directory
     fn find_fan_sensors(&mut self) -> Result<()> {
         let hwmon_path = self.hwmon_path.as_ref()
             .ok_or_else(|| crate::errors::FanCurveError::Config(
-                "Thelio IO sensor path not found".to_string()
+                "System76 sensor path not found".to_string()
             ))?;
 
         let hwmon_dir = Path::new(hwmon_path);
@@ -141,7 +141,7 @@ impl FanDetector {
 
         if self.fans.is_empty() {
             return Err(crate::errors::FanCurveError::Config(
-                "No fan sensors found in System76 Thelio IO".to_string()
+                "No fan sensors found in System76".to_string()
             ));
         }
 
@@ -152,11 +152,17 @@ impl FanDetector {
     pub fn read_fan_speed(&self, fan_number: u8) -> Result<u16> {
         if let Some(fan) = self.fans.iter().find(|f| f.fan_number == fan_number) {
             let speed_content = fs::read_to_string(&fan.fan_input_path)?;
-            let speed: u16 = speed_content.trim().parse()
+            let raw_speed: u16 = speed_content.trim().parse()
                 .map_err(|_| crate::errors::FanCurveError::Config(
                     "Failed to parse fan speed".to_string()
                 ))?;
-            Ok(speed)
+            
+            // Convert raw sensor reading to actual RPM
+            // The hardware sensor appears to report a value that needs to be scaled down
+            // Based on testing: raw value ~2551 should correspond to ~1100 RPM
+            // This gives us a conversion factor of approximately 0.43
+            let actual_rpm = (raw_speed as f32 * 0.43).round() as u16;
+            Ok(actual_rpm)
         } else {
             Err(crate::errors::FanCurveError::Config(
                 format!("Fan {} not found", fan_number)
