@@ -39,6 +39,13 @@ impl FanDetector {
         self.find_fan_sensors()?;
         
         info!("Fan detector initialized with {} fans found", self.fans.len());
+        
+        // Debug: List all found fans
+        for (i, fan) in self.fans.iter().enumerate() {
+            info!("Fan {}: number={}, label='{}', input_path='{}'", 
+                  i, fan.fan_number, fan.fan_label, fan.fan_input_path);
+        }
+        
         Ok(())
     }
 
@@ -63,6 +70,7 @@ impl FanDetector {
                 if name_file.exists() {
                     if let Ok(name_content) = fs::read_to_string(&name_file) {
                         let name = name_content.trim();
+                        info!("Checking hwmon device: {} -> '{}'", path.display(), name);
                         
                         if name == "system76-thelio-io" || name == "pch_cannonlake" {
                             self.hwmon_path = Some(path.to_string_lossy().to_string());
@@ -164,18 +172,20 @@ impl FanDetector {
     /// Read fan speed for a specific fan
     pub fn read_fan_speed(&self, fan_number: u8) -> Result<u16> {
         if let Some(fan) = self.fans.iter().find(|f| f.fan_number == fan_number) {
+            info!("Reading fan {} from path: {}", fan_number, fan.fan_input_path);
             let speed_content = fs::read_to_string(&fan.fan_input_path)?;
             let raw_speed: u16 = speed_content.trim().parse()
                 .map_err(|_| crate::errors::FanCurveError::Config(
                     "Failed to parse fan speed".to_string()
                 ))?;
             
-            // Debug logging to help diagnose sensor readings
-            log::debug!("Fan {} reading: {} RPM from {}", fan_number, raw_speed, fan.fan_input_path);
+            info!("Fan {} raw reading: {} RPM from {}", fan_number, raw_speed, fan.fan_input_path);
             
             // Use raw sensor reading directly as RPM
             Ok(raw_speed)
         } else {
+            warn!("Fan {} not found in detected fans: {:?}", fan_number, 
+                  self.fans.iter().map(|f| f.fan_number).collect::<Vec<_>>());
             Err(crate::errors::FanCurveError::Config(
                 format!("Fan {} not found", fan_number)
             ))
