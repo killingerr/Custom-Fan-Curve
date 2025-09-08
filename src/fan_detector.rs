@@ -240,22 +240,32 @@ impl FanDetector {
             }
             
             // Enable PWM control (1 = manual control, 2 = automatic)
-            fs::write(&pwm_enable_path, "1")
-                .map_err(|e| {
-                    crate::errors::FanCurveError::Io(format!(
-                        "Failed to enable PWM control for fan {} (permission denied?): {}",
-                        fan_number, e
+            fs::write(&pwm_enable_path, "1").map_err(|e| {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    crate::errors::FanCurveError::PermissionDenied(format!(
+                        "Failed to enable PWM control for fan {} at {}: {}",
+                        fan_number,
+                        pwm_enable_path.display(),
+                        e
                     ))
-                })?;
+                } else {
+                    crate::errors::FanCurveError::Io(e)
+                }
+            })?;
             
             // Set PWM duty (0-255)
-            fs::write(&pwm_path, duty.to_string())
-                .map_err(|e| {
-                    crate::errors::FanCurveError::Io(format!(
-                        "Failed to set PWM duty for fan {} (permission denied?): {}",
-                        fan_number, e
+            fs::write(&pwm_path, duty.to_string()).map_err(|e| {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    crate::errors::FanCurveError::PermissionDenied(format!(
+                        "Failed to set PWM duty for fan {} at {}: {}",
+                        fan_number,
+                        pwm_path.display(),
+                        e
                     ))
-                })?;
+                } else {
+                    crate::errors::FanCurveError::Io(e)
+                }
+            })?;
             
             info!("Fan {} PWM set to {} at {}", fan_number, duty, pwm_path.display());
             Ok(())
