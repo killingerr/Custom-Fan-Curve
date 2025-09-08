@@ -64,9 +64,9 @@ impl FanDetector {
                     if let Ok(name_content) = fs::read_to_string(&name_file) {
                         let name = name_content.trim();
                         
-                        if name == "system76" || name == "pch_cannonlake" {
+                        if name == "system76-thelio-io" {
                             self.hwmon_path = Some(path.to_string_lossy().to_string());
-                            info!("Found fan sensor device '{}' at: {}", name, path.display());
+                            info!("Found System76 Thelio IO sensor at: {}", path.display());
                             return Ok(());
                         }
                     }
@@ -75,7 +75,7 @@ impl FanDetector {
         }
 
         Err(crate::errors::FanCurveError::Config(
-            "Fan sensor device not found (looking for 'system76' or 'pch_cannonlake')".to_string()
+            "System76 Thelio IO sensor not found".to_string()
         ))
     }
 
@@ -83,7 +83,7 @@ impl FanDetector {
     fn find_fan_sensors(&mut self) -> Result<()> {
         let hwmon_path = self.hwmon_path.as_ref()
             .ok_or_else(|| crate::errors::FanCurveError::Config(
-                "Fan sensor device path not found".to_string()
+                "System76 Thelio IO sensor path not found".to_string()
             ))?;
 
         let hwmon_dir = Path::new(hwmon_path);
@@ -114,7 +114,9 @@ impl FanDetector {
         // Sort by fan number
         fan_files.sort_by_key(|(num, _)| *num);
 
-        // Create fan sensors
+        // Create fan sensors and prioritize CPU Fan
+        let mut cpu_fan_found = false;
+        
         for (fan_number, input_path) in fan_files {
             let label_path = hwmon_dir.join(format!("fan{}_label", fan_number));
             
@@ -132,8 +134,15 @@ impl FanDetector {
                     fan_label,
                 };
                 
-                info!("Found fan sensor: Fan {} - {}", fan_number, fan_sensor.fan_label);
-                self.fans.push(fan_sensor);
+                // Prioritize CPU Fan by adding it first
+                if fan_sensor.fan_label == "CPU Fan" {
+                    info!("Found CPU Fan sensor: Fan {} - {}", fan_number, fan_sensor.fan_label);
+                    self.fans.insert(0, fan_sensor);
+                    cpu_fan_found = true;
+                } else {
+                    info!("Found fan sensor: Fan {} - {}", fan_number, fan_sensor.fan_label);
+                    self.fans.push(fan_sensor);
+                }
             } else {
                 warn!("Fan {} input found but no corresponding label file", fan_number);
             }
@@ -141,8 +150,12 @@ impl FanDetector {
 
         if self.fans.is_empty() {
             return Err(crate::errors::FanCurveError::Config(
-                "No fan sensors found in detected device".to_string()
+                "No fan sensors found in System76 Thelio IO".to_string()
             ));
+        }
+
+        if !cpu_fan_found {
+            warn!("No CPU Fan found, but {} other fans detected", self.fans.len());
         }
 
         Ok(())
@@ -173,18 +186,10 @@ impl FanDetector {
     pub fn read_all_fan_speeds(&self) -> Result<Vec<(u8, u16, String)>> {
         let mut speeds = Vec::new();
         
-        // Prioritize CPU fan if it exists (check for both "CPU fan" and "CPU Fan")
-        if let Some(cpu_fan) = self.fans.iter().find(|f| f.fan_label == "CPU fan" || f.fan_label == "CPU Fan") {
-            let speed = self.read_fan_speed(cpu_fan.fan_number)?;
-            speeds.push((cpu_fan.fan_number, speed, cpu_fan.fan_label.clone()));
-        }
-        
-        // Add other fans (excluding CPU fan if already added)
+        // Since fans are already prioritized with CPU Fan first, just read them in order
         for fan in &self.fans {
-            if fan.fan_label != "CPU fan" && fan.fan_label != "CPU Fan" {
-                let speed = self.read_fan_speed(fan.fan_number)?;
-                speeds.push((fan.fan_number, speed, fan.fan_label.clone()));
-            }
+            let speed = self.read_fan_speed(fan.fan_number)?;
+            speeds.push((fan.fan_number, speed, fan.fan_label.clone()));
         }
         
         Ok(speeds)
@@ -202,7 +207,7 @@ impl FanDetector {
 
     /// Get the CPU fan specifically
     pub fn get_cpu_fan(&self) -> Option<&FanSensor> {
-        self.fans.iter().find(|f| f.fan_label == "CPU fan" || f.fan_label == "CPU Fan")
+        self.fans.iter().find(|f| f.fan_label == "CPU Fan")
     }
 
     /// Read CPU fan speed specifically
