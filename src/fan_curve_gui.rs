@@ -11,6 +11,7 @@ pub struct FanCurveApp {
     new_curve_name: String,
     show_save_dialog: bool,
     fan_monitor: FanMonitor,
+    last_applied_curve_index: Option<usize>,
     current_fan_data: Option<crate::fan_monitor::FanDataPoint>,
     last_fan_data_update: std::time::Instant,
     show_add_point_dialog: bool,
@@ -56,6 +57,7 @@ impl FanCurveApp {
             edit_point_index: None,
             edit_point_temp: String::new(),
             edit_point_duty: String::new(),
+            last_applied_curve_index: None,
         }
     }
 
@@ -83,6 +85,13 @@ impl eframe::App for FanCurveApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Always update live fan data every 1s
         if self.last_fan_data_update.elapsed() >= std::time::Duration::from_secs(1) {
+            // Ensure the monitor is using the currently selected curve
+            if self.last_applied_curve_index != Some(self.current_curve_index) {
+                self.fan_monitor
+                    .set_fan_curve(self.fan_curves[self.current_curve_index].clone());
+                self.last_applied_curve_index = Some(self.current_curve_index);
+            }
+
             if let Ok(data) = self.fan_monitor.get_current_fan_data_sync() {
                 println!(
                     "🔄 GUI: Updated fan data - Temp: {:.1}°C, Fan: {} RPM, Duty: {}%",
