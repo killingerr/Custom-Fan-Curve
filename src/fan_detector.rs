@@ -168,9 +168,18 @@ impl FanDetector {
     pub fn read_all_fan_speeds(&self) -> Result<Vec<(u8, u16, String)>> {
         let mut speeds = Vec::new();
         
+        // Prioritize CPU fan if it exists
+        if let Some(cpu_fan) = self.fans.iter().find(|f| f.fan_label == "CPU fan") {
+            let speed = self.read_fan_speed(cpu_fan.fan_number)?;
+            speeds.push((cpu_fan.fan_number, speed, cpu_fan.fan_label.clone()));
+        }
+        
+        // Add other fans (excluding CPU fan if already added)
         for fan in &self.fans {
-            let speed = self.read_fan_speed(fan.fan_number)?;
-            speeds.push((fan.fan_number, speed, fan.fan_label.clone()));
+            if fan.fan_label != "CPU fan" {
+                let speed = self.read_fan_speed(fan.fan_number)?;
+                speeds.push((fan.fan_number, speed, fan.fan_label.clone()));
+            }
         }
         
         Ok(speeds)
@@ -184,6 +193,21 @@ impl FanDetector {
     /// Get fan by number
     pub fn get_fan(&self, fan_number: u8) -> Option<&FanSensor> {
         self.fans.iter().find(|f| f.fan_number == fan_number)
+    }
+
+    /// Get the CPU fan specifically
+    pub fn get_cpu_fan(&self) -> Option<&FanSensor> {
+        self.fans.iter().find(|f| f.fan_label == "CPU fan")
+    }
+
+    /// Read CPU fan speed specifically
+    pub fn read_cpu_fan_speed(&self) -> Result<Option<(u8, u16, String)>> {
+        if let Some(cpu_fan) = self.get_cpu_fan() {
+            let speed = self.read_fan_speed(cpu_fan.fan_number)?;
+            Ok(Some((cpu_fan.fan_number, speed, cpu_fan.fan_label.clone())))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Check if the detector is initialized

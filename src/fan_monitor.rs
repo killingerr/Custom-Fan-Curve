@@ -256,6 +256,12 @@ impl FanMonitor {
             return Ok(self.simulate_fan_speeds_fallback());
         }
 
+        // Prioritize CPU fan if available
+        if let Ok(Some(cpu_fan_data)) = self.fan_detector.read_cpu_fan_speed() {
+            return Ok(vec![cpu_fan_data]);
+        }
+
+        // Fallback to all fans if no CPU fan found
         self.fan_detector.read_all_fan_speeds()
     }
 
@@ -263,7 +269,7 @@ impl FanMonitor {
     fn simulate_fan_speeds_fallback(&self) -> Vec<(u8, u16, String)> {
         // Simulate a single fan for fallback
         let simulated_speed = self.simulate_fan_speed_fallback(50.0); // Use a reasonable temperature
-        vec![(1, simulated_speed, "Simulated Fan".to_string())]
+        vec![(1, simulated_speed, "CPU fan".to_string())]
     }
 
     /// Simulate fan speed based on temperature (single fan)
