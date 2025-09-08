@@ -11,12 +11,8 @@ pub struct FanCurveApp {
     new_curve_name: String,
     show_save_dialog: bool,
     fan_monitor: FanMonitor,
-    is_testing: bool,
-    test_duration: u64,
     current_fan_data: Option<crate::fan_monitor::FanDataPoint>,
     last_fan_data_update: std::time::Instant,
-    test_start_time: Option<std::time::Instant>,
-    test_remaining_seconds: u64,
     show_add_point_dialog: bool,
     new_point_temp: String,
     new_point_duty: String,
@@ -51,12 +47,8 @@ impl FanCurveApp {
             new_curve_name: String::new(),
             show_save_dialog: false,
             fan_monitor: FanMonitor::new(),
-            is_testing: false,
-            test_duration: 30,
             current_fan_data: None,
             last_fan_data_update: std::time::Instant::now(),
-            test_start_time: None,
-            test_remaining_seconds: 30,
             show_add_point_dialog: false,
             new_point_temp: String::new(),
             new_point_duty: String::new(),
@@ -89,41 +81,22 @@ impl FanCurveApp {
 
 impl eframe::App for FanCurveApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Update fan data if testing
-        if self.is_testing {
-            // Check if test should end
-            if let Some(start_time) = self.test_start_time {
-                let elapsed = start_time.elapsed();
-                let remaining = self.test_duration.saturating_sub(elapsed.as_secs());
-                self.test_remaining_seconds = remaining;
-
-                if remaining == 0 {
-                    // Test completed
-                    self.is_testing = false;
-                    self.test_start_time = None;
-                    self.fan_monitor.stop_monitoring();
-                    self.set_status(format!(
-                        "Fan test completed after {} seconds",
-                        self.test_duration
-                    ));
-                }
+        // Always update live fan data every 1s
+        if self.last_fan_data_update.elapsed() >= std::time::Duration::from_secs(1) {
+            if let Ok(data) = self.fan_monitor.get_current_fan_data_sync() {
+                println!(
+                    "🔄 GUI: Updated fan data - Temp: {:.1}°C, Fan: {} RPM, Duty: {}%",
+                    data.temperature, data.fan_speed, data.fan_duty
+                );
+                self.current_fan_data = Some(data);
+                self.last_fan_data_update = std::time::Instant::now();
             }
-
-            // Update fan data every 1 second
-            if self.last_fan_data_update.elapsed() >= std::time::Duration::from_secs(1) {
-                if let Ok(data) = self.fan_monitor.get_current_fan_data_sync() {
-                    println!(
-                        "🔄 GUI: Updated fan data - Temp: {:.1}°C, Fan: {} RPM, Duty: {}%",
-                        data.temperature, data.fan_speed, data.fan_duty
-                    );
-                    self.current_fan_data = Some(data);
-                    self.last_fan_data_update = std::time::Instant::now();
-                }
-            }
-
-            // Request repaint more frequently for smooth updates
-            ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
+
+        // No test mode state to manage
+
+        // Request periodic repaint for smooth updates
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
 
         // Main content area
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -142,13 +115,7 @@ impl eframe::App for FanCurveApp {
                                 if Some(index) == self.default_curve_index {
                                     text += " (Default)";
                                 }
-                                let old_index = self.current_curve_index;
                                 ui.selectable_value(&mut self.current_curve_index, index, text);
-
-                                // Update fan monitor if curve changed during monitoring
-                                if self.is_testing && old_index != self.current_curve_index {
-                                    self.fan_monitor.update_fan_curve(self.fan_curves[self.current_curve_index].clone());
-                                }
                             }
                         });
 
@@ -259,38 +226,7 @@ impl eframe::App for FanCurveApp {
                 }
             }
 
-            // Test mode section
-            ui.separator();
-            ui.heading("Test Mode");
-
-            ui.horizontal(|ui| {
-                ui.label("Test Duration (seconds):");
-                ui.add(egui::Slider::new(&mut self.test_duration, 5..=300)
-                    .text("seconds"));
-            });
-
-            if ui.button("Start Test").clicked() && !self.is_testing {
-                self.is_testing = true;
-                self.test_start_time = Some(std::time::Instant::now());
-                self.test_remaining_seconds = self.test_duration;
-
-                // Set the current fan curve for the monitor
-                self.fan_monitor.set_fan_curve(self.fan_curves[self.current_curve_index].clone());
-
-                self.fan_monitor.start_monitoring(Some(std::path::Path::new("fan_test.csv")))
-                    .unwrap_or_else(|e| {
-                        self.set_status(format!("Failed to start monitoring: {}", e));
-                    });
-                self.set_status(format!("Fan test started for {} seconds - monitoring fan data with '{}' curve",
-                    self.test_duration, self.fan_curves[self.current_curve_index].name()));
-            }
-
-            if ui.button("Stop Test").clicked() && self.is_testing {
-                self.is_testing = false;
-                self.test_start_time = None;
-                self.fan_monitor.stop_monitoring();
-                self.set_status("Fan test stopped manually".to_string());
-            }
+            // (Test mode removed)
 
             // Add point dialog
             if self.show_add_point_dialog {
@@ -449,129 +385,104 @@ impl eframe::App for FanCurveApp {
             }
         });
 
-        // Bottom panel for live fan data during testing
-        if self.is_testing {
-            egui::TopBottomPanel::bottom("live_fan_data")
-                .resizable(true)
-                .min_height(120.0)
-                .show(ctx, |ui| {
-                    ui.allocate_ui_with_layout(
-                        ui.available_size(),
-                        egui::Layout::top_down(egui::Align::Center),
-                        |ui| {
-                            // Test status header
+        // Bottom panel for live fan data (always visible)
+        egui::TopBottomPanel::bottom("live_fan_data")
+            .resizable(true)
+            .min_height(120.0)
+            .show(ctx, |ui| {
+                ui.allocate_ui_with_layout(
+                    ui.available_size(),
+                    egui::Layout::top_down(egui::Align::Center),
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.heading("🌡️ Live Fan Data");
+                        });
+
+                        ui.separator();
+
+                        // Live data display
+                        if let Some(ref data) = self.current_fan_data {
                             ui.horizontal(|ui| {
-                                ui.heading("🌡️ Live Fan Data");
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if self.test_remaining_seconds <= 10 {
-                                            ui.colored_label(
-                                                egui::Color32::RED,
-                                                "🔴 Final Countdown!",
-                                            );
-                                        }
-                                        ui.label(format!(
-                                            "⏰ Time Remaining: {} seconds",
-                                            self.test_remaining_seconds
-                                        ));
-                                    },
-                                );
+                                // Temperature and Fan Speed
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label("🌡️ Temperature:");
+                                        ui.colored_label(
+                                            if data.temperature > 70.0 {
+                                                egui::Color32::RED
+                                            } else if data.temperature > 50.0 {
+                                                egui::Color32::YELLOW
+                                            } else {
+                                                egui::Color32::GREEN
+                                            },
+                                            format!("{:.1}°C", data.temperature),
+                                        );
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("🌀 Fan Speed:");
+                                        ui.colored_label(
+                                            if data.fan_speed > 2500 {
+                                                egui::Color32::RED
+                                            } else if data.fan_speed > 1500 {
+                                                egui::Color32::YELLOW
+                                            } else {
+                                                egui::Color32::GREEN
+                                            },
+                                            format!("{} RPM", data.fan_speed),
+                                        );
+                                    });
+                                });
+
+                                ui.add_space(20.0);
+
+                                // Fan Duty and CPU Usage
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label("⚡ Fan Duty:");
+                                        ui.colored_label(
+                                            if data.fan_duty > 80 {
+                                                egui::Color32::RED
+                                            } else if data.fan_duty > 50 {
+                                                egui::Color32::YELLOW
+                                            } else {
+                                                egui::Color32::GREEN
+                                            },
+                                            format!("{}%", data.fan_duty),
+                                        );
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("💻 CPU Usage:");
+                                        ui.colored_label(
+                                            if data.cpu_usage > 80.0 {
+                                                egui::Color32::RED
+                                            } else if data.cpu_usage > 50.0 {
+                                                egui::Color32::YELLOW
+                                            } else {
+                                                egui::Color32::GREEN
+                                            },
+                                            format!("{:.1}%", data.cpu_usage),
+                                        );
+                                    });
+                                });
+
+                                ui.add_space(20.0);
+
+                                // Timestamp
+                                ui.vertical(|ui| {
+                                    ui.label("⏰ Last Update:");
+                                    ui.label(data.timestamp.format("%H:%M:%S").to_string());
+                                });
                             });
 
-                            ui.separator();
-
-                            // Live data display
-                            if let Some(ref data) = self.current_fan_data {
-                                ui.horizontal(|ui| {
-                                    // Temperature and Fan Speed
-                                    ui.vertical(|ui| {
-                                        ui.horizontal(|ui| {
-                                            ui.label("🌡️ Temperature:");
-                                            ui.colored_label(
-                                                if data.temperature > 70.0 {
-                                                    egui::Color32::RED
-                                                } else if data.temperature > 50.0 {
-                                                    egui::Color32::YELLOW
-                                                } else {
-                                                    egui::Color32::GREEN
-                                                },
-                                                format!("{:.1}°C", data.temperature),
-                                            );
-                                        });
-                                        ui.horizontal(|ui| {
-                                            ui.label("🌀 Fan Speed:");
-                                            ui.colored_label(
-                                                if data.fan_speed > 2500 {
-                                                    egui::Color32::RED
-                                                } else if data.fan_speed > 1500 {
-                                                    egui::Color32::YELLOW
-                                                } else {
-                                                    egui::Color32::GREEN
-                                                },
-                                                format!("{} RPM", data.fan_speed),
-                                            );
-                                        });
-                                    });
-
-                                    ui.add_space(20.0);
-
-                                    // Fan Duty and CPU Usage
-                                    ui.vertical(|ui| {
-                                        ui.horizontal(|ui| {
-                                            ui.label("⚡ Fan Duty:");
-                                            ui.colored_label(
-                                                if data.fan_duty > 80 {
-                                                    egui::Color32::RED
-                                                } else if data.fan_duty > 50 {
-                                                    egui::Color32::YELLOW
-                                                } else {
-                                                    egui::Color32::GREEN
-                                                },
-                                                format!("{}%", data.fan_duty),
-                                            );
-                                        });
-                                        ui.horizontal(|ui| {
-                                            ui.label("💻 CPU Usage:");
-                                            ui.colored_label(
-                                                if data.cpu_usage > 80.0 {
-                                                    egui::Color32::RED
-                                                } else if data.cpu_usage > 50.0 {
-                                                    egui::Color32::YELLOW
-                                                } else {
-                                                    egui::Color32::GREEN
-                                                },
-                                                format!("{:.1}%", data.cpu_usage),
-                                            );
-                                        });
-                                    });
-
-                                    ui.add_space(20.0);
-
-                                    // Timestamp
-                                    ui.vertical(|ui| {
-                                        ui.label("⏰ Last Update:");
-                                        ui.label(data.timestamp.format("%H:%M:%S").to_string());
-                                    });
-                                });
-
-                                // Progress bar
-                                let progress = 1.0
-                                    - (self.test_remaining_seconds as f32
-                                        / self.test_duration as f32);
-                                ui.add(
-                                    egui::ProgressBar::new(progress)
-                                        .text(format!("Test Progress: {:.1}%", progress * 100.0)),
-                                );
-                            } else {
-                                ui.horizontal(|ui| {
-                                    ui.spinner();
-                                    ui.label("🔄 Collecting fan data...");
-                                });
-                            }
-                        },
-                    );
-                });
-        }
+                            // (No progress bar; test mode removed)
+                        } else {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label("🔄 Collecting fan data...");
+                            });
+                        }
+                    },
+                );
+            });
     }
 }
