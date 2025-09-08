@@ -101,8 +101,17 @@ impl eframe::App for FanCurveApp {
 
             if let Ok(data) = self.fan_monitor.get_current_fan_data_sync() {
                 println!(
-                    "🔄 GUI: Updated fan data - Temp: {:.1}°C, Fan: {} RPM, Duty: {}%",
-                    data.temperature, data.fan_speed, data.fan_duty
+                    "🔄 GUI: Updated fan data - Temp: {:.1}°C, Fans: {}, Duty: {}%",
+                    data.temperature, 
+                    if data.fan_speeds.is_empty() {
+                        "No fans".to_string()
+                    } else {
+                        data.fan_speeds.iter()
+                            .map(|(_num, speed, label)| format!("{}: {} RPM", label, speed))
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    },
+                    data.fan_duty
                 );
                 self.current_fan_data = Some(data);
                 self.last_fan_data_update = std::time::Instant::now();
@@ -461,17 +470,26 @@ impl eframe::App for FanCurveApp {
                                         );
                                     });
                                     ui.horizontal(|ui| {
-                                        ui.label("🌀 Fan Speed:");
-                                        ui.colored_label(
-                                            if data.fan_speed > 2500 {
-                                                egui::Color32::RED
-                                            } else if data.fan_speed > 1500 {
-                                                egui::Color32::YELLOW
-                                            } else {
-                                                egui::Color32::GREEN
-                                            },
-                                            format!("{} RPM", data.fan_speed),
-                                        );
+                                        ui.label("🌀 Fan Speeds:");
+                                        if data.fan_speeds.is_empty() {
+                                            ui.colored_label(egui::Color32::GRAY, "No fans detected");
+                                        } else {
+                                            for (i, (_num, speed, label)) in data.fan_speeds.iter().enumerate() {
+                                                if i > 0 {
+                                                    ui.label(" | ");
+                                                }
+                                                ui.colored_label(
+                                                    if *speed > 2500 {
+                                                        egui::Color32::RED
+                                                    } else if *speed > 1500 {
+                                                        egui::Color32::YELLOW
+                                                    } else {
+                                                        egui::Color32::GREEN
+                                                    },
+                                                    format!("{}: {} RPM", label, speed),
+                                                );
+                                            }
+                                        }
                                     });
                                 });
 

@@ -1,5 +1,6 @@
 use crate::errors::Result;
 use crate::cpu_temp::CpuTempDetector;
+use crate::fan_detector::FanDetector;
 use chrono::{DateTime, Local};
 use log::{info, warn};
 use rand;
@@ -13,7 +14,7 @@ use tokio::time::{sleep, Duration};
 pub struct FanDataPoint {
     pub timestamp: DateTime<Local>,
     pub temperature: f32,
-    pub fan_speed: u16,
+    pub fan_speeds: Vec<(u8, u16, String)>, // (fan_number, speed, label)
     pub fan_duty: u16,
     pub cpu_usage: f32,
 }
@@ -25,6 +26,7 @@ pub struct FanMonitor {
     last_log_time: Instant,
     current_fan_curve: Option<crate::fan::FanCurve>,
     cpu_temp_detector: CpuTempDetector,
+    fan_detector: FanDetector,
 }
 
 impl FanMonitor {
@@ -36,13 +38,23 @@ impl FanMonitor {
             last_log_time: Instant::now(),
             current_fan_curve: None,
             cpu_temp_detector: CpuTempDetector::new(),
+            fan_detector: FanDetector::new(),
         }
     }
 
-    /// Initialize the fan monitor (detects CPU temperature sensor)
+    /// Initialize the fan monitor (detects CPU temperature sensor and fans)
     pub fn initialize(&mut self) -> Result<()> {
-        self.cpu_temp_detector.initialize()?;
-        info!("Fan monitor initialized with CPU temperature detection");
+        // Initialize CPU temperature detection
+        if let Err(e) = self.cpu_temp_detector.initialize() {
+            warn!("Failed to initialize CPU temperature detection: {}", e);
+        }
+        
+        // Initialize fan detection
+        if let Err(e) = self.fan_detector.initialize() {
+            warn!("Failed to initialize fan detection: {}", e);
+        }
+        
+        info!("Fan monitor initialized with {} fans detected", self.fan_detector.fan_count());
         Ok(())
     }
 
@@ -93,6 +105,11 @@ impl FanMonitor {
         &self.cpu_temp_detector
     }
 
+    /// Get the fan detector
+    pub fn fan_detector(&self) -> &FanDetector {
+        &self.fan_detector
+    }
+
     /// Initialize the CPU temperature detector
     pub fn initialize_cpu_temp(&mut self) -> Result<()> {
         self.cpu_temp_detector.initialize()?;
@@ -109,14 +126,14 @@ impl FanMonitor {
     pub fn get_current_fan_data_sync(&self) -> Result<FanDataPoint> {
         // Read real CPU temperature
         let temperature = self.read_cpu_temperature()?;
-        let fan_speed = self.simulate_fan_speed(temperature); // TODO: Implement real fan speed reading
+        let fan_speeds = self.read_fan_speeds()?;
         let fan_duty = self.calculate_fan_duty_from_curve(temperature);
         let cpu_usage = self.read_cpu_usage()?;
 
         Ok(FanDataPoint {
             timestamp: chrono::Local::now(),
             temperature,
-            fan_speed,
+            fan_speeds,
             fan_duty,
             cpu_usage,
         })
@@ -126,14 +143,14 @@ impl FanMonitor {
     pub async fn get_current_fan_data(&self) -> Result<FanDataPoint> {
         // Read real CPU temperature
         let temperature = self.read_cpu_temperature()?;
-        let fan_speed = self.simulate_fan_speed(temperature); // TODO: Implement real fan speed reading
+        let fan_speeds = self.read_fan_speeds()?;
         let fan_duty = self.calculate_fan_duty_from_curve(temperature);
         let cpu_usage = self.read_cpu_usage()?;
 
         Ok(FanDataPoint {
             timestamp: chrono::Local::now(),
             temperature,
-            fan_speed,
+            fan_speeds,
             fan_duty,
             cpu_usage,
         })
@@ -154,9 +171,18 @@ impl FanMonitor {
         self.last_log_time = Instant::now();
 
         // Real-time console output with formatting
-        println!("🌡️  Temperature: {:.1}°C | 🌀 Fan Speed: {} RPM | ⚡ Fan Duty: {}% | 💻 CPU: {:.1}% | ⏰ {}",
+        let fan_info = if data.fan_speeds.is_empty() {
+            "No fans".to_string()
+        } else {
+            data.fan_speeds.iter()
+                .map(|(_num, speed, label)| format!("{}: {} RPM", label, speed))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+        
+        println!("🌡️  Temperature: {:.1}°C | 🌀 Fans: {} | ⚡ Fan Duty: {}% | 💻 CPU: {:.1}% | ⏰ {}",
             data.temperature,
-            data.fan_speed,
+            fan_info,
             data.fan_duty,
             data.cpu_usage,
             data.timestamp.format("%H:%M:%S")
@@ -164,11 +190,20 @@ impl FanMonitor {
 
         // Log to file if enabled
         if let Some(ref path) = self.log_file {
+            let fan_speeds_str = if data.fan_speeds.is_empty() {
+                "No fans".to_string()
+            } else {
+                data.fan_speeds.iter()
+                    .map(|(_num, speed, label)| format!("{}:{}", label, speed))
+                    .collect::<Vec<_>>()
+                    .join(";")
+            };
+            
             let csv_line = format!(
                 "{},{:.1},{},{},{:.1}\n",
                 data.timestamp.format("%Y-%m-%d %H:%M:%S%.3f"),
                 data.temperature,
-                data.fan_speed,
+                fan_speeds_str,
                 data.fan_duty,
                 data.cpu_usage
             );
@@ -213,6 +248,33 @@ impl FanMonitor {
         self.cpu_temp_detector.read_temperature()
     }
 
+    /// Read fan speeds from hardware sensors
+    fn read_fan_speeds(&self) -> Result<Vec<(u8, u16, String)>> {
+        if !self.fan_detector.is_initialized() {
+            // Fallback to simulation if not initialized
+            warn!("Fan detector not initialized, using simulation");
+            return Ok(self.simulate_fan_speeds_fallback());
+        }
+
+        self.fan_detector.read_all_fan_speeds()
+    }
+
+    /// Fallback fan speed simulation (used when hardware detection fails)
+    fn simulate_fan_speeds_fallback(&self) -> Vec<(u8, u16, String)> {
+        // Simulate a single fan for fallback
+        let simulated_speed = self.simulate_fan_speed_fallback(50.0); // Use a reasonable temperature
+        vec![(1, simulated_speed, "Simulated Fan".to_string())]
+    }
+
+    /// Simulate fan speed based on temperature (single fan)
+    fn simulate_fan_speed_fallback(&self, temperature: f32) -> u16 {
+        let base_speed = 800;
+        let temp_factor = ((temperature - 30.0).max(0.0) * 50.0) as u16;
+        let random_factor = (rand::random::<f32>() - 0.5) * 100.0;
+
+        (base_speed + temp_factor + random_factor as u16).clamp(0, 3000)
+    }
+
     /// Fallback temperature simulation (used when hardware detection fails)
     fn simulate_temperature_fallback(&self) -> f32 {
         let base_temp = 35.0;
@@ -223,14 +285,6 @@ impl FanMonitor {
         base_temp + time_factor * 10.0 + cpu_factor + random_factor
     }
 
-    /// Simulate fan speed based on temperature
-    fn simulate_fan_speed(&self, temperature: f32) -> u16 {
-        let base_speed = 800;
-        let temp_factor = ((temperature - 30.0).max(0.0) * 50.0) as u16;
-        let random_factor = (rand::random::<f32>() - 0.5) * 100.0;
-
-        (base_speed + temp_factor + random_factor as u16).clamp(0, 3000)
-    }
 
     /// Calculate fan duty based on the current fan curve
     fn calculate_fan_duty_from_curve(&self, temperature: f32) -> u16 {

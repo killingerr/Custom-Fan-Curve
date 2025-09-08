@@ -227,8 +227,8 @@ impl CpuTempDetector {
     }
 
     /// Get the detected CPU manufacturer
-    pub fn manufacturer(&self) -> &CpuManufacturer {
-        self.sensor.as_ref().map(|s| &s.manufacturer).unwrap_or(&CpuManufacturer::Unknown)
+    pub fn manufacturer(&self) -> CpuManufacturer {
+        self.sensor.as_ref().map(|s| s.manufacturer.clone()).unwrap_or(CpuManufacturer::Unknown)
     }
 }
 
