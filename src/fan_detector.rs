@@ -64,9 +64,9 @@ impl FanDetector {
                     if let Ok(name_content) = fs::read_to_string(&name_file) {
                         let name = name_content.trim();
                         
-                        if name == "system76-thelio-io" {
+                        if name == "system76-thelio-io" || name == "pch_cannonlake" {
                             self.hwmon_path = Some(path.to_string_lossy().to_string());
-                            info!("Found System76 Thelio IO sensor at: {}", path.display());
+                            info!("Found fan sensor device '{}' at: {}", name, path.display());
                             return Ok(());
                         }
                     }
@@ -75,7 +75,7 @@ impl FanDetector {
         }
 
         Err(crate::errors::FanCurveError::Config(
-            "System76 Thelio IO sensor not found".to_string()
+            "Fan sensor device not found (looking for 'system76-thelio-io' or 'pch_cannonlake')".to_string()
         ))
     }
 
@@ -83,7 +83,7 @@ impl FanDetector {
     fn find_fan_sensors(&mut self) -> Result<()> {
         let hwmon_path = self.hwmon_path.as_ref()
             .ok_or_else(|| crate::errors::FanCurveError::Config(
-                "System76 Thelio IO sensor path not found".to_string()
+                "Fan sensor device path not found".to_string()
             ))?;
 
         let hwmon_dir = Path::new(hwmon_path);
@@ -150,7 +150,7 @@ impl FanDetector {
 
         if self.fans.is_empty() {
             return Err(crate::errors::FanCurveError::Config(
-                "No fan sensors found in System76 Thelio IO".to_string()
+                "No fan sensors found in detected device".to_string()
             ));
         }
 
