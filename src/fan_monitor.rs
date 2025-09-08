@@ -269,7 +269,7 @@ impl FanMonitor {
     fn simulate_fan_speeds_fallback(&self) -> Vec<(u8, u16, String)> {
         // Simulate a single fan for fallback
         let simulated_speed = self.simulate_fan_speed_fallback(50.0); // Use a reasonable temperature
-        vec![(1, simulated_speed, "CPU fan".to_string())]
+        vec![(1, simulated_speed, "CPU Fan".to_string())]
     }
 
     /// Simulate fan speed based on temperature (single fan)
