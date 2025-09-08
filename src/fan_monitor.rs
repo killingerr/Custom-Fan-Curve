@@ -1,6 +1,7 @@
 use crate::errors::Result;
 use crate::cpu_temp::CpuTempDetector;
 use crate::fan_detector::FanDetector;
+use crate::system76_power_client::System76PowerClient;
 use chrono::{DateTime, Local};
 use log::{info, warn};
 use rand;
@@ -27,6 +28,7 @@ pub struct FanMonitor {
     current_fan_curve: Option<crate::fan::FanCurve>,
     cpu_temp_detector: CpuTempDetector,
     fan_detector: FanDetector,
+    system76_power_client: Option<System76PowerClient>,
 }
 
 impl FanMonitor {
@@ -39,6 +41,7 @@ impl FanMonitor {
             current_fan_curve: None,
             cpu_temp_detector: CpuTempDetector::new(),
             fan_detector: FanDetector::new(),
+            system76_power_client: None,
         }
     }
 
@@ -56,6 +59,25 @@ impl FanMonitor {
         
         info!("Fan monitor initialized with {} fans detected", self.fan_detector.fan_count());
         Ok(())
+    }
+
+    /// Initialize System76 Power client
+    pub async fn initialize_system76_power(&mut self) -> Result<()> {
+        match System76PowerClient::new().await {
+            Ok(client) => {
+                if client.is_available().await {
+                    self.system76_power_client = Some(client);
+                    info!("System76 Power client initialized and available");
+                } else {
+                    warn!("System76 Power service not available");
+                }
+                Ok(())
+            }
+            Err(e) => {
+                warn!("Failed to initialize System76 Power client: {}", e);
+                Ok(()) // Don't fail initialization if System76 Power is not available
+            }
+        }
     }
 
     /// Set the current fan curve for duty calculation
@@ -170,7 +192,7 @@ impl FanMonitor {
         let data = self.get_current_fan_data().await?;
         
         // Apply fan curve to hardware
-        if let Err(e) = self.apply_fan_curve(data.temperature) {
+        if let Err(e) = self.apply_fan_curve(data.temperature).await {
             warn!("Failed to apply fan curve: {}", e);
         }
         
@@ -313,8 +335,8 @@ impl FanMonitor {
         }
     }
 
-    /// Apply fan curve to hardware (set PWM duty)
-    pub fn apply_fan_curve(&self, temperature: f32) -> Result<()> {
+    /// Apply fan curve to hardware via System76 Power DBus interface
+    pub async fn apply_fan_curve(&self, temperature: f32) -> Result<()> {
         if !self.fan_detector.is_initialized() {
             warn!("Fan detector not initialized, cannot apply fan curve");
             return Ok(());
@@ -322,25 +344,17 @@ impl FanMonitor {
 
         let duty_percentage = self.calculate_fan_duty_from_curve(temperature);
         
-        // Convert percentage (0-100) to PWM value (0-255)
-        let pwm_value = ((duty_percentage as f32 / 100.0) * 255.0).round() as u8;
+        info!("Applying fan curve: {:.1}°C -> {}% duty", temperature, duty_percentage);
         
-        info!("Applying fan curve: {:.1}°C -> {}% duty -> PWM {}", temperature, duty_percentage, pwm_value);
-        
-        // Debug: List all detected fans
-        let fans = self.fan_detector.get_fans();
-        info!("Detected fans: {:?}", fans.iter().map(|f| (f.fan_number, &f.fan_label)).collect::<Vec<_>>());
-        
-        // Apply to CPU fan if available
-        if let Some(cpu_fan) = self.fan_detector.get_cpu_fan() {
-            info!("Found CPU fan: Fan {} - {}", cpu_fan.fan_number, cpu_fan.fan_label);
-            self.fan_detector.set_fan_pwm(cpu_fan.fan_number, pwm_value)?;
+        // Try to use System76 Power client if available
+        if let Some(ref client) = self.system76_power_client {
+            if let Err(e) = client.apply_fan_curve(temperature, duty_percentage).await {
+                warn!("Failed to apply fan curve via System76 Power: {}", e);
+                warn!("Falling back to direct PWM control (if available)");
+            }
         } else {
-            warn!("No CPU fan found for PWM control. Available fans: {:?}", 
-                  fans.iter().map(|f| (f.fan_number, &f.fan_label)).collect::<Vec<_>>());
-            return Err(crate::errors::FanCurveError::Config(
-                "No CPU fan found for PWM control".to_string()
-            ));
+            warn!("System76 Power client not initialized, cannot apply fan curve");
+            warn!("Current duty: {}% - this should be applied via System76 Power", duty_percentage);
         }
         
         Ok(())
@@ -427,6 +441,12 @@ pub async fn test_fan_curve(
 
     let mut monitor = FanMonitor::new();
     monitor.initialize()?;
+    
+    // Initialize System76 Power client
+    if let Err(e) = monitor.initialize_system76_power().await {
+        warn!("Failed to initialize System76 Power client: {}", e);
+    }
+    
     monitor.start_monitoring(log_file)?;
 
     // Start monitoring in background
