@@ -72,7 +72,7 @@ impl FanDetector {
                         let name = name_content.trim();
                         info!("Checking hwmon device: {} -> '{}'", path.display(), name);
                         
-                        if name == "system76-thelio-io" || name == "pch_cannonlake" {
+                        if name == "system76-thelio-io" || name == "pch_cannonlake" || name == "system76" {
                             self.hwmon_path = Some(path.to_string_lossy().to_string());
                             info!("Found fan sensor device '{}' at: {}", name, path.display());
                             return Ok(());
@@ -142,8 +142,9 @@ impl FanDetector {
                     fan_label,
                 };
                 
-                // Prioritize CPU Fan by adding it first
-                if fan_sensor.fan_label == "CPU Fan" {
+                // Prioritize CPU Fan by adding it first (check multiple label variations)
+                if fan_sensor.fan_label == "CPU Fan" || fan_sensor.fan_label == "CPU fan" || 
+                   fan_sensor.fan_label.to_lowercase().contains("cpu") {
                     info!("Found CPU Fan sensor: Fan {} - {}", fan_number, fan_sensor.fan_label);
                     self.fans.insert(0, fan_sensor);
                     cpu_fan_found = true;
@@ -164,6 +165,10 @@ impl FanDetector {
 
         if !cpu_fan_found {
             warn!("No CPU Fan found, but {} other fans detected", self.fans.len());
+            if !self.fans.is_empty() {
+                info!("Will use first available fan: Fan {} - {}", 
+                      self.fans[0].fan_number, self.fans[0].fan_label);
+            }
         }
 
         Ok(())
@@ -217,7 +222,9 @@ impl FanDetector {
 
     /// Get the CPU fan specifically
     pub fn get_cpu_fan(&self) -> Option<&FanSensor> {
-        self.fans.iter().find(|f| f.fan_label == "CPU Fan")
+        self.fans.iter().find(|f| f.fan_label == "CPU Fan" || 
+                                   f.fan_label == "CPU fan" || 
+                                   f.fan_label.to_lowercase().contains("cpu"))
     }
 
     /// Read CPU fan speed specifically
