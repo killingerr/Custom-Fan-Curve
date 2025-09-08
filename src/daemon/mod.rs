@@ -3,6 +3,7 @@
 use crate::{
     errors::{zbus_error_from_display, FanCurveError, Result},
     fan::{FanCurve, FanCurveConfig},
+    thelio_io::ThelioIoClient,
     DBUS_OBJECT_PATH, DBUS_SERVICE_NAME,
 };
 use log::{debug, error, info};
@@ -14,6 +15,8 @@ use zbus::{dbus_interface, ConnectionBuilder};
 pub struct FanCurveDaemon {
     config: Arc<Mutex<FanCurveConfig>>,
     current_curve_index: Arc<Mutex<usize>>,
+    #[allow(dead_code)]
+    thelio: Option<ThelioIoClient>,
 }
 
 impl FanCurveDaemon {
@@ -22,9 +25,22 @@ impl FanCurveDaemon {
         let config = Arc::new(Mutex::new(Self::load_config()?));
         let current_curve_index = Arc::new(Mutex::new(0));
 
+        // Thelio client is optional and non-fatal if unavailable
+        let thelio = match ThelioIoClient::new() {
+            Ok(client) => {
+                if client.available() {
+                    Some(client)
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        };
+
         Ok(Self {
             config,
             current_curve_index,
+            thelio,
         })
     }
 

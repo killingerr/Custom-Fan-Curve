@@ -10,6 +10,7 @@ pub mod fan;
 pub mod fan_curve_gui;
 pub mod fan_monitor;
 pub mod logging;
+pub mod thelio_io;
 
 // DBus constants following System76 Power patterns
 pub const DBUS_SERVICE_NAME: &str = "com.system76.FanCurveDaemon";

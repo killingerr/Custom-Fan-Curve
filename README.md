@@ -8,6 +8,7 @@ A modern GUI application for controlling CPU fan curves on System76 laptops, bui
 - 🌡️ **Real-time Temperature Monitoring** - Monitor CPU temperatures and fan speeds
 - 📊 **Multiple Curve Profiles** - Save and switch between different fan curve configurations
 - 🔧 **System76 Integration** - Designed specifically for System76 laptops
+- 🧩 **Optional Thelio IO Integration** - Experimental hook to the Thelio IO daemon
 - 🚀 **High Performance** - Built with Rust for optimal performance and reliability
 
 ## Quick Installation
@@ -70,6 +71,20 @@ fan-curve --help
 4. Use "Edit" to modify existing curves or create new ones
 
 ## Configuration
+### Thelio IO (Experimental)
+
+Set an environment variable to enable Thelio IO integration. When enabled, the app will attempt to detect the Thelio IO DBus service and, if present, use it as a backend for chassis fan telemetry/control in future updates.
+
+```bash
+export FAN_APP_ENABLE_THELIO_IO=1
+# Optional: override service name if needed
+export FAN_APP_THELIO_IO_SERVICE="com.system76.ThelioIo"
+```
+
+Notes:
+- If the service is not present, the application continues to function normally (no-op backend).
+- Current implementation includes stubs for fan RPM/duty and temperature; concrete wiring can be added once the interface is finalized.
+
 
 Configuration files are stored in `~/.fan_curve_app/config.json`. You can edit this file directly or use the GUI to modify settings.
 
