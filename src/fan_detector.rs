@@ -72,9 +72,9 @@ impl FanDetector {
                         let name = name_content.trim();
                         info!("Checking hwmon device: {} -> '{}'", path.display(), name);
                         
-                        if name == "system76-thelio-io" || name == "pch_cannonlake" || name == "system76" {
+                        if name == "system76_thelio_io" {
                             self.hwmon_path = Some(path.to_string_lossy().to_string());
-                            info!("Found fan sensor device '{}' at: {}", name, path.display());
+                            info!("Found System76 Thelio IO sensor at: {}", path.display());
                             return Ok(());
                         }
                     }
@@ -83,95 +83,66 @@ impl FanDetector {
         }
 
         Err(crate::errors::FanCurveError::Config(
-            "Fan sensor device not found (looking for 'system76-thelio-io' or 'pch_cannonlake')".to_string()
+            "System76 Thelio IO sensor not found".to_string()
         ))
     }
 
-    /// Find all fan sensors in the detected device directory
+    /// Find the CPU Fan sensor in the System76 Thelio IO directory
     fn find_fan_sensors(&mut self) -> Result<()> {
         let hwmon_path = self.hwmon_path.as_ref()
             .ok_or_else(|| crate::errors::FanCurveError::Config(
-                "Fan sensor device path not found".to_string()
+                "System76 Thelio IO sensor path not found".to_string()
             ))?;
 
         let hwmon_dir = Path::new(hwmon_path);
-        let entries = fs::read_dir(hwmon_dir)?;
+        info!("Searching for CPU Fan in directory: {}", hwmon_dir.display());
         
-        let mut fan_files = Vec::new();
-        
-        // Collect all fan input files
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
+        // Search through fan1_label, fan2_label, fan3_label, etc. until we find "CPU Fan"
+        let mut fan_number = 1;
+        loop {
+            let label_path = hwmon_dir.join(format!("fan{}_label", fan_number));
+            let input_path = hwmon_dir.join(format!("fan{}_input", fan_number));
             
-            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                if file_name.starts_with("fan") && file_name.ends_with("_input") {
-                    // Extract fan number
-                    if let Some(fan_num_str) = file_name
-                        .strip_prefix("fan")
-                        .and_then(|s| s.strip_suffix("_input"))
-                    {
-                        if let Ok(fan_number) = fan_num_str.parse::<u8>() {
-                            fan_files.push((fan_number, path.to_string_lossy().to_string()));
-                        }
+            info!("Checking fan{}_label at: {}", fan_number, label_path.display());
+            
+            if label_path.exists() && input_path.exists() {
+                if let Ok(label_content) = fs::read_to_string(&label_path) {
+                    let fan_label = label_content.trim().to_string();
+                    info!("Found fan{}_label: '{}'", fan_number, fan_label);
+                    
+                    if fan_label == "CPU Fan" {
+                        info!("Found CPU Fan at fan{}! Using fan{}_input for data", fan_number, fan_number);
+                        
+                        let fan_sensor = FanSensor {
+                            fan_number,
+                            hwmon_path: hwmon_path.clone(),
+                            fan_input_path: input_path.to_string_lossy().to_string(),
+                            fan_label_path: label_path.to_string_lossy().to_string(),
+                            fan_label,
+                        };
+                        
+                        self.fans.push(fan_sensor);
+                        info!("CPU Fan sensor added: Fan {} - {} -> {}", 
+                              fan_number, fan_label, input_path.display());
+                        return Ok(());
                     }
                 }
-            }
-        }
-
-        // Sort by fan number
-        fan_files.sort_by_key(|(num, _)| *num);
-
-        // Create fan sensors and prioritize CPU Fan
-        let mut cpu_fan_found = false;
-        
-        for (fan_number, input_path) in fan_files {
-            let label_path = hwmon_dir.join(format!("fan{}_label", fan_number));
-            
-            if label_path.exists() {
-                let fan_label = fs::read_to_string(&label_path)
-                    .unwrap_or_else(|_| format!("Fan {}", fan_number))
-                    .trim()
-                    .to_string();
-                
-                let fan_sensor = FanSensor {
-                    fan_number,
-                    hwmon_path: hwmon_path.clone(),
-                    fan_input_path: input_path,
-                    fan_label_path: label_path.to_string_lossy().to_string(),
-                    fan_label,
-                };
-                
-                // Prioritize CPU Fan by adding it first (check multiple label variations)
-                if fan_sensor.fan_label == "CPU Fan" || fan_sensor.fan_label == "CPU fan" || 
-                   fan_sensor.fan_label.to_lowercase().contains("cpu") {
-                    info!("Found CPU Fan sensor: Fan {} - {}", fan_number, fan_sensor.fan_label);
-                    self.fans.insert(0, fan_sensor);
-                    cpu_fan_found = true;
-                } else {
-                    info!("Found fan sensor: Fan {} - {}", fan_number, fan_sensor.fan_label);
-                    self.fans.push(fan_sensor);
-                }
             } else {
-                warn!("Fan {} input found but no corresponding label file", fan_number);
+                // No more fan files found, stop searching
+                break;
+            }
+            
+            fan_number += 1;
+            
+            // Safety limit to prevent infinite loop
+            if fan_number > 10 {
+                break;
             }
         }
 
-        if self.fans.is_empty() {
-            return Err(crate::errors::FanCurveError::Config(
-                "No fan sensors found in detected device".to_string()
-            ));
-        }
-
-        if !cpu_fan_found {
-            warn!("No CPU Fan found, but {} other fans detected", self.fans.len());
-            if !self.fans.is_empty() {
-                info!("Will use first available fan: Fan {} - {}", 
-                      self.fans[0].fan_number, self.fans[0].fan_label);
-            }
-        }
-
-        Ok(())
+        Err(crate::errors::FanCurveError::Config(
+            "CPU Fan not found in System76 Thelio IO".to_string()
+        ))
     }
 
     /// Read fan speed for a specific fan
