@@ -118,7 +118,7 @@ impl FanDetector {
                             hwmon_path: hwmon_path.clone(),
                             fan_input_path: input_path.to_string_lossy().to_string(),
                             fan_label_path: label_path.to_string_lossy().to_string(),
-                            fan_label,
+                            fan_label: fan_label.clone(),
                         };
                         
                         self.fans.push(fan_sensor);
