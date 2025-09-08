@@ -64,9 +64,9 @@ impl FanDetector {
                     if let Ok(name_content) = fs::read_to_string(&name_file) {
                         let name = name_content.trim();
                         
-                        if name == "system76" {
+                        if name == "system76" || name == "pch_cannonlake" {
                             self.hwmon_path = Some(path.to_string_lossy().to_string());
-                            info!("Found System76 sensor at: {}", path.display());
+                            info!("Found fan sensor device '{}' at: {}", name, path.display());
                             return Ok(());
                         }
                     }
@@ -75,15 +75,15 @@ impl FanDetector {
         }
 
         Err(crate::errors::FanCurveError::Config(
-            "System76 sensor not found".to_string()
+            "Fan sensor device not found (looking for 'system76' or 'pch_cannonlake')".to_string()
         ))
     }
 
-    /// Find all fan sensors in the System76 directory
+    /// Find all fan sensors in the detected device directory
     fn find_fan_sensors(&mut self) -> Result<()> {
         let hwmon_path = self.hwmon_path.as_ref()
             .ok_or_else(|| crate::errors::FanCurveError::Config(
-                "System76 sensor path not found".to_string()
+                "Fan sensor device path not found".to_string()
             ))?;
 
         let hwmon_dir = Path::new(hwmon_path);
@@ -141,7 +141,7 @@ impl FanDetector {
 
         if self.fans.is_empty() {
             return Err(crate::errors::FanCurveError::Config(
-                "No fan sensors found in System76".to_string()
+                "No fan sensors found in detected device".to_string()
             ));
         }
 
@@ -157,17 +157,11 @@ impl FanDetector {
                     "Failed to parse fan speed".to_string()
                 ))?;
             
-            // Debug logging to help diagnose conversion issues
-            log::debug!("Fan {} raw reading: {} from {}", fan_number, raw_speed, fan.fan_input_path);
+            // Debug logging to help diagnose sensor readings
+            log::debug!("Fan {} reading: {} RPM from {}", fan_number, raw_speed, fan.fan_input_path);
             
-            // Convert raw sensor reading to actual RPM
-            // The hardware sensor appears to report a value that needs to be scaled down
-            // Based on testing: raw value ~2551 should correspond to ~1100 RPM
-            // This gives us a conversion factor of approximately 0.43
-            let actual_rpm = (raw_speed as f32 * 0.43).round() as u16;
-            
-            log::debug!("Fan {} converted RPM: {} (raw: {})", fan_number, actual_rpm, raw_speed);
-            Ok(actual_rpm)
+            // Use raw sensor reading directly as RPM
+            Ok(raw_speed)
         } else {
             Err(crate::errors::FanCurveError::Config(
                 format!("Fan {} not found", fan_number)
