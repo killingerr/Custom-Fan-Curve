@@ -256,12 +256,16 @@ impl FanMonitor {
             return Ok(self.simulate_fan_speeds_fallback());
         }
 
+        info!("Fan detector initialized, reading from hardware sensors");
+        
         // Prioritize CPU fan if available
         if let Ok(Some(cpu_fan_data)) = self.fan_detector.read_cpu_fan_speed() {
+            info!("Found CPU fan: Fan {} at {} RPM", cpu_fan_data.0, cpu_fan_data.1);
             return Ok(vec![cpu_fan_data]);
         }
 
         // Fallback to all fans if no CPU fan found
+        info!("No CPU fan found, reading all fans");
         self.fan_detector.read_all_fan_speeds()
     }
 

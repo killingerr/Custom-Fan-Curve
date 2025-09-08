@@ -157,11 +157,16 @@ impl FanDetector {
                     "Failed to parse fan speed".to_string()
                 ))?;
             
+            // Debug logging to help diagnose conversion issues
+            log::debug!("Fan {} raw reading: {} from {}", fan_number, raw_speed, fan.fan_input_path);
+            
             // Convert raw sensor reading to actual RPM
             // The hardware sensor appears to report a value that needs to be scaled down
             // Based on testing: raw value ~2551 should correspond to ~1100 RPM
             // This gives us a conversion factor of approximately 0.43
             let actual_rpm = (raw_speed as f32 * 0.43).round() as u16;
+            
+            log::debug!("Fan {} converted RPM: {} (raw: {})", fan_number, actual_rpm, raw_speed);
             Ok(actual_rpm)
         } else {
             Err(crate::errors::FanCurveError::Config(
