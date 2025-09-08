@@ -193,9 +193,14 @@ impl FanDetector {
 
     /// Get the CPU fan specifically
     pub fn get_cpu_fan(&self) -> Option<&FanSensor> {
-        self.fans.iter().find(|f| f.fan_label == "CPU Fan" || 
+        let cpu_fan = self.fans.iter().find(|f| f.fan_label == "CPU Fan" || 
                                    f.fan_label == "CPU fan" || 
-                                   f.fan_label.to_lowercase().contains("cpu"))
+                                   f.fan_label.to_lowercase().contains("cpu"));
+        if cpu_fan.is_none() {
+            warn!("CPU Fan not found. Available fans: {:?}", 
+                  self.fans.iter().map(|f| (f.fan_number, &f.fan_label)).collect::<Vec<_>>());
+        }
+        cpu_fan
     }
 
     /// Read CPU fan speed specifically

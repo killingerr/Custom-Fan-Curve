@@ -327,11 +327,20 @@ impl FanMonitor {
         
         info!("Applying fan curve: {:.1}°C -> {}% duty -> PWM {}", temperature, duty_percentage, pwm_value);
         
+        // Debug: List all detected fans
+        let fans = self.fan_detector.get_fans();
+        info!("Detected fans: {:?}", fans.iter().map(|f| (f.fan_number, &f.fan_label)).collect::<Vec<_>>());
+        
         // Apply to CPU fan if available
         if let Some(cpu_fan) = self.fan_detector.get_cpu_fan() {
+            info!("Found CPU fan: Fan {} - {}", cpu_fan.fan_number, cpu_fan.fan_label);
             self.fan_detector.set_fan_pwm(cpu_fan.fan_number, pwm_value)?;
         } else {
-            warn!("No CPU fan found for PWM control");
+            warn!("No CPU fan found for PWM control. Available fans: {:?}", 
+                  fans.iter().map(|f| (f.fan_number, &f.fan_label)).collect::<Vec<_>>());
+            return Err(crate::errors::FanCurveError::Config(
+                "No CPU fan found for PWM control".to_string()
+            ));
         }
         
         Ok(())
