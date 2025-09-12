@@ -1,5 +1,5 @@
 use crate::errors::Result;
-use log::{info, warn};
+use log::{error, info, warn};
 use std::fs;
 use std::path::Path;
 
@@ -38,7 +38,34 @@ impl FanDetector {
         // Find all fan sensors in that directory
         self.find_fan_sensors()?;
         
-        info!("Fan detector initialized with {} fans found", self.fans.len());
+        info!("🔍 Fan detector initialized with {} fans found", self.fans.len());
+        
+        // Log details about each detected fan
+        for fan in &self.fans {
+            info!("   📍 Fan {}: {} at {}", fan.fan_number, fan.fan_label, fan.hwmon_path);
+            
+            // Check PWM file status
+            let pwm_path = Path::new(&fan.hwmon_path).join(format!("pwm{}", fan.fan_number));
+            let pwm_enable_path = Path::new(&fan.hwmon_path).join(format!("pwm{}_enable", fan.fan_number));
+            
+            if pwm_path.exists() {
+                info!("      ✅ PWM file exists: {}", pwm_path.display());
+                
+                // Check if PWM file is writable
+                match std::fs::OpenOptions::new().write(true).open(&pwm_path) {
+                    Ok(_) => info!("      ✅ PWM file is writable"),
+                    Err(e) => warn!("      ❌ PWM file not writable: {}", e),
+                }
+            } else {
+                warn!("      ❌ PWM file missing: {}", pwm_path.display());
+            }
+            
+            if pwm_enable_path.exists() {
+                info!("      ✅ PWM enable file exists: {}", pwm_enable_path.display());
+            } else {
+                info!("      ℹ️  PWM enable file missing: {} (may not be required)", pwm_enable_path.display());
+            }
+        }
         
         // Debug: List all found fans
         for (i, fan) in self.fans.iter().enumerate() {
@@ -282,29 +309,42 @@ impl FanDetector {
     pub fn set_duty(&self, duty_opt: Option<u8>) -> Result<()> {
         if let Some(duty) = duty_opt {
             let duty_str = format!("{}", duty);
-            info!("Setting all fans to PWM duty: {}", duty);
+            info!("🎛️  Setting all fans to PWM duty: {} (0-255 scale)", duty);
+            info!("🔍 Found {} fans to control", self.fans.len());
             
             // Set all available fans to the same duty
             for fan in &self.fans {
                 let pwm_path = Path::new(&fan.hwmon_path).join(format!("pwm{}", fan.fan_number));
                 let pwm_enable_path = Path::new(&fan.hwmon_path).join(format!("pwm{}_enable", fan.fan_number));
                 
+                info!("🔧 Processing fan {}: {}", fan.fan_number, fan.fan_label);
+                info!("   📁 PWM path: {}", pwm_path.display());
+                info!("   📁 Enable path: {}", pwm_enable_path.display());
+                
+                // Check if PWM file exists and is writable
+                if !pwm_path.exists() {
+                    warn!("❌ PWM file does not exist: {}", pwm_path.display());
+                    continue;
+                }
+                
                 // Enable manual PWM control
+                info!("   🔓 Enabling manual PWM control for fan {}...", fan.fan_number);
                 if let Err(e) = fs::write(&pwm_enable_path, "1") {
-                    warn!("Failed to enable PWM control for fan {} at {}: {}", 
+                    warn!("⚠️  Failed to enable PWM control for fan {} at {}: {}", 
                           fan.fan_number, pwm_enable_path.display(), e);
                     // Continue anyway - some systems don't require enable files
                 } else {
-                    info!("PWM control enabled for fan {}", fan.fan_number);
+                    info!("   ✅ PWM control enabled for fan {}", fan.fan_number);
                 }
                 
                 // Set PWM duty
+                info!("   ⚙️  Setting PWM duty to {} for fan {}...", duty, fan.fan_number);
                 if let Err(e) = fs::write(&pwm_path, &duty_str) {
-                    warn!("Failed to set PWM duty for fan {} at {}: {}", 
-                          fan.fan_number, pwm_path.display(), e);
+                    error!("❌ Failed to set PWM duty for fan {} at {}: {}", 
+                           fan.fan_number, pwm_path.display(), e);
                     return Err(crate::errors::FanCurveError::Io(e));
                 } else {
-                    info!("Fan {} PWM set to {} at {}", fan.fan_number, duty, pwm_path.display());
+                    info!("   ✅ Fan {} PWM successfully set to {} at {}", fan.fan_number, duty, pwm_path.display());
                 }
             }
         } else {
@@ -319,6 +359,32 @@ impl FanDetector {
                 } else {
                     info!("Fan {} set to automatic mode", fan.fan_number);
                 }
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Verify PWM values by reading them back from the hardware
+    pub fn verify_pwm_values(&self) -> Result<()> {
+        info!("🔍 Verifying PWM values...");
+        
+        for fan in &self.fans {
+            let pwm_path = Path::new(&fan.hwmon_path).join(format!("pwm{}", fan.fan_number));
+            
+            if pwm_path.exists() {
+                match fs::read_to_string(&pwm_path) {
+                    Ok(value) => {
+                        let pwm_value: std::result::Result<u8, _> = value.trim().parse();
+                        match pwm_value {
+                            Ok(val) => info!("   ✅ Fan {} PWM value: {} (verified)", fan.fan_number, val),
+                            Err(_) => warn!("   ⚠️  Fan {} PWM value unparseable: '{}'", fan.fan_number, value.trim()),
+                        }
+                    }
+                    Err(e) => warn!("   ❌ Failed to read PWM value for fan {}: {}", fan.fan_number, e),
+                }
+            } else {
+                warn!("   ❌ PWM file not found for fan {}: {}", fan.fan_number, pwm_path.display());
             }
         }
         

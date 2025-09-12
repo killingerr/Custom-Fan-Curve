@@ -403,7 +403,15 @@ impl FanMonitor {
         let duty = self.calculate_fan_duty_from_curve(temperature);
         let duty_percentage = duty / 100; // Convert ten-thousandths to percentage for display
         
-        info!("Applying fan curve: {:.1}°C -> {}% duty ({} ten-thousandths)", 
+        info!("🌡️  Temperature: {:.1}°C", temperature);
+        info!("📊 Calculated duty: {} ({}%)", duty, duty_percentage);
+        
+        // Special logging for 100% duty test
+        if duty == 10000 {
+            info!("🔥 TEST MODE: 100% DUTY DETECTED - This should set PWM to 255!");
+        }
+        
+        info!("🔄 Applying fan curve: {:.1}°C -> {}% duty ({} ten-thousandths)", 
               temperature, duty_percentage, duty);
         
         // Try to use System76 Power client if available (for power profiles)
@@ -417,11 +425,23 @@ impl FanMonitor {
         
         // Convert duty (0-10000) to PWM value (0-255) using system76-power formula
         let pwm_value = self.duty_to_pwm(duty);
+        info!("⚡ PWM conversion: {} duty -> {} PWM (formula: ({} * 255) / 10000)", 
+              duty, pwm_value, duty);
+        
+        // Special logging for PWM 255 test
+        if pwm_value == 255 {
+            info!("🔥 TEST MODE: PWM 255 DETECTED - This should make fans run at maximum speed!");
+        }
         
         // Apply to all fans using the new set_duty method (matches system76-power approach)
         match self.fan_detector.set_duty(Some(pwm_value)) {
             Ok(()) => {
                 info!("✅ Successfully applied PWM control to all fans: {} (duty: {}%)", pwm_value, duty_percentage);
+                
+                // Verify the PWM values were actually set
+                if let Err(e) = self.fan_detector.verify_pwm_values() {
+                    warn!("⚠️  PWM verification failed: {}", e);
+                }
             }
             Err(e) => {
                 error!("❌ Failed to set fan PWM via set_duty: {}", e);
@@ -495,6 +515,51 @@ impl FanMonitor {
         let cpu_usage = (total_non_idle as f32 / total as f32) * 100.0;
         Ok(cpu_usage.clamp(0.0, 100.0))
     }
+
+    /// Debug method to show current fan status and PWM values
+    pub fn debug_fan_status(&self) -> Result<()> {
+        info!("🔍 Current Fan Status Debug:");
+        
+        // Show detected fans
+        let fans = self.fan_detector.get_fans();
+        info!("   📊 Detected fans: {}", fans.len());
+        for fan in fans {
+            info!("      Fan {}: {} at {}", fan.fan_number, fan.fan_label, fan.hwmon_path);
+        }
+        
+        // Show current temperature and calculated duty
+        match self.read_cpu_temperature() {
+            Ok(temp) => {
+                let duty = self.calculate_fan_duty_from_curve(temp);
+                let pwm = self.duty_to_pwm(duty);
+                info!("   🌡️  Current temperature: {:.1}°C", temp);
+                info!("   📊 Calculated duty: {} ({}%)", duty, duty / 100);
+                info!("   ⚡ Calculated PWM: {}", pwm);
+            }
+            Err(e) => warn!("   ❌ Failed to read temperature: {}", e),
+        }
+        
+        // Show current fan speeds
+        match self.read_fan_speeds() {
+            Ok(speeds) => {
+                if speeds.is_empty() {
+                    info!("   🌀 No fan speeds detected");
+                } else {
+                    for (fan_num, speed, label) in speeds {
+                        info!("   🌀 Fan {} ({}): {} RPM", fan_num, label, speed);
+                    }
+                }
+            }
+            Err(e) => warn!("   ❌ Failed to read fan speeds: {}", e),
+        }
+        
+        // Verify current PWM values
+        if let Err(e) = self.fan_detector.verify_pwm_values() {
+            warn!("   ⚠️  PWM verification failed: {}", e);
+        }
+        
+        Ok(())
+    }
 }
 
 impl Default for FanMonitor {
@@ -525,10 +590,19 @@ pub async fn test_fan_curve(
     let mut monitor = FanMonitor::new();
     monitor.initialize()?;
     
-    // Load fan curve configuration from file
+    // Load fan curve configuration from file first (as fallback)
     if let Err(e) = monitor.load_fan_curve_config() {
         warn!("Failed to load fan curve config: {}", e);
     }
+    
+    // Create a test fan curve that forces 100% duty at all temperatures
+    let mut test_curve = crate::fan::FanCurve::new("Test 100%".to_string());
+    test_curve.add_point(0, 10000);   // 100% at 0°C
+    test_curve.add_point(50, 10000);  // 100% at 50°C  
+    test_curve.add_point(100, 10000); // 100% at 100°C
+    monitor.set_fan_curve(test_curve);
+    
+    info!("🧪 Test mode: Using 100% duty curve for all temperatures");
     
     // Initialize System76 Power client
     if let Err(e) = monitor.initialize_system76_power().await {
@@ -546,6 +620,11 @@ pub async fn test_fan_curve(
     }
     
     monitor.start_monitoring()?;
+
+    // Debug: Show initial fan status
+    if let Err(e) = monitor.debug_fan_status() {
+        warn!("Debug fan status failed: {}", e);
+    }
 
     // Start monitoring in background
     let monitor_handle = {
