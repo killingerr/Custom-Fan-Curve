@@ -59,16 +59,38 @@ impl FanCurveDaemon {
         }
     }
 
-    /// Save configuration to file
+    /// Save configuration to file with proper error handling
     fn save_config_internal(&self) -> Result<()> {
         let config = self.config.lock().unwrap();
         let config_path = FanCurveConfig::get_config_path();
+        
+        // Ensure the directory exists
         if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent).map_err(FanCurveError::Io)?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                error!("Failed to create config directory: {}", e);
+                FanCurveError::Io(e)
+            })?;
         }
-        config
-            .save_to_file(&config_path)
-            .map_err(|e| FanCurveError::Config(format!("Failed to save config: {}", e)))
+        
+        // Create a temporary file first, then rename for atomic operation
+        let temp_path = config_path.with_extension("tmp");
+        
+        // Save to temporary file
+        config.save_to_file(&temp_path).map_err(|e| {
+            error!("Failed to save config to temp file: {}", e);
+            FanCurveError::Config(format!("Failed to save config: {}", e))
+        })?;
+        
+        // Atomically rename temp file to final location
+        std::fs::rename(&temp_path, &config_path).map_err(|e| {
+            error!("Failed to rename temp config file: {}", e);
+            // Try to clean up temp file
+            let _ = std::fs::remove_file(&temp_path);
+            FanCurveError::Io(e)
+        })?;
+        
+        info!("Configuration saved successfully to: {}", config_path.display());
+        Ok(())
     }
 
     /// Send a fan curve changed signal
@@ -76,6 +98,40 @@ impl FanCurveDaemon {
         // For now, just log that we would send a signal
         // TODO: Implement proper signal sending when signal context is available
         info!("Fan curve changed - signal would be sent to fan monitor");
+    }
+
+    /// Ensure configuration is saved with retry logic
+    fn ensure_config_saved(&self) -> Result<()> {
+        let mut retries = 3;
+        while retries > 0 {
+            match self.save_config_internal() {
+                Ok(()) => {
+                    // Validate persistence after successful save
+                    if let Err(e) = self.validate_persistence() {
+                        error!("Persistence validation failed: {}", e);
+                        // Don't fail the save operation, but log the issue
+                    }
+                    return Ok(());
+                }
+                Err(e) => {
+                    retries -= 1;
+                    if retries > 0 {
+                        error!("Failed to save config, retrying... ({} attempts left): {}", retries, e);
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    } else {
+                        error!("Failed to save config after all retries: {}", e);
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate that configuration persists correctly
+    fn validate_persistence(&self) -> Result<()> {
+        let config = self.config.lock().unwrap();
+        config.validate_persistence()
     }
 
     /// Run the daemon
@@ -179,8 +235,9 @@ impl FanCurveDaemon {
             config.default_curve_index = Some(index);
             drop(config);
 
-            if let Err(e) = self.save_config_internal() {
-                error!("Failed to save config: {}", e);
+            // Ensure config is saved immediately
+            if let Err(e) = self.ensure_config_saved() {
+                error!("Failed to save config after setting default: {}", e);
                 return Err(zbus_error_from_display(format!(
                     "Failed to save config: {}",
                     e
@@ -218,8 +275,9 @@ impl FanCurveDaemon {
         };
 
         if valid_index {
-            if let Err(e) = self.save_config_internal() {
-                error!("Failed to save config: {}", e);
+            // Ensure config is saved immediately
+            if let Err(e) = self.ensure_config_saved() {
+                error!("Failed to save config after adding point: {}", e);
                 return Err(zbus_error_from_display(format!(
                     "Failed to save config: {}",
                     e
@@ -253,8 +311,9 @@ impl FanCurveDaemon {
         };
 
         if point_removed {
-            if let Err(e) = self.save_config_internal() {
-                error!("Failed to save config: {}", e);
+            // Ensure config is saved immediately
+            if let Err(e) = self.ensure_config_saved() {
+                error!("Failed to save config after removing point: {}", e);
                 return Err(zbus_error_from_display(format!(
                     "Failed to save config: {}",
                     e
@@ -276,7 +335,7 @@ impl FanCurveDaemon {
     async fn save_config(&self) -> zbus::fdo::Result<()> {
         debug!("Saving configuration");
 
-        if let Err(e) = self.save_config_internal() {
+        if let Err(e) = self.ensure_config_saved() {
             error!("Failed to save config: {}", e);
             return Err(zbus_error_from_display(format!(
                 "Failed to save config: {}",

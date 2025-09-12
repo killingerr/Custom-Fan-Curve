@@ -70,8 +70,13 @@ impl FanCurveApp {
 
     fn save_config(&self) -> Result<()> {
         let config_path = FanCurveConfig::get_config_path();
+        
+        // Ensure the directory exists
         if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                eprintln!("Failed to create config directory: {}", e);
+                e
+            })?;
         }
 
         let config = FanCurveConfig {
@@ -79,12 +84,39 @@ impl FanCurveApp {
             default_curve_index: self.default_curve_index,
         };
 
-        config.save_to_file(&config_path)?;
+        // Create a temporary file first, then rename for atomic operation
+        let temp_path = config_path.with_extension("tmp");
+        
+        // Save to temporary file
+        config.save_to_file(&temp_path).map_err(|e| {
+            eprintln!("Failed to save config to temp file: {}", e);
+            e
+        })?;
+        
+        // Atomically rename temp file to final location
+        std::fs::rename(&temp_path, &config_path).map_err(|e| {
+            eprintln!("Failed to rename temp config file: {}", e);
+            // Try to clean up temp file
+            let _ = std::fs::remove_file(&temp_path);
+            e
+        })?;
+        
+        println!("Configuration saved successfully to: {}", config_path.display());
         Ok(())
     }
 
     fn set_status(&mut self, message: String) {
         self.status_message = Some(message);
+    }
+
+    /// Auto-save configuration with error handling
+    fn auto_save_config(&mut self) {
+        if let Err(e) = self.save_config() {
+            eprintln!("Auto-save failed: {}", e);
+            self.set_status(format!("Auto-save failed: {}", e));
+        } else {
+            self.set_status("Configuration saved".to_string());
+        }
     }
 }
 
@@ -207,6 +239,8 @@ impl eframe::App for FanCurveApp {
                         removed_point.temp,
                         removed_point.duty
                     ));
+                    // Auto-save after removing point
+                    self.auto_save_config();
                 }
             }
 
@@ -271,6 +305,8 @@ impl eframe::App for FanCurveApp {
                         self.fan_curves.push(new_curve);
                         self.new_curve_name.clear();
                         self.set_status("Profile saved!".to_string());
+                        // Auto-save after creating new profile
+                        self.auto_save_config();
                     } else {
                         self.new_curve_name.clear();
                     }
@@ -336,6 +372,8 @@ impl eframe::App for FanCurveApp {
                         ) {
                             self.fan_curves[self.current_curve_index].add_point(temp, duty);
                             self.set_status(format!("Added point: {}°C -> {}%", temp, duty));
+                            // Auto-save after adding point
+                            self.auto_save_config();
                         }
                         self.new_point_temp.clear();
                         self.new_point_duty.clear();
@@ -411,6 +449,8 @@ impl eframe::App for FanCurveApp {
                                     if let Some(_old_point) = self.fan_curves[self.current_curve_index].remove_point(index) {
                                         self.fan_curves[self.current_curve_index].add_point(temp, duty);
                                         self.set_status(format!("Updated point {}: {}°C -> {}%", index + 1, temp, duty));
+                                        // Auto-save after editing point
+                                        self.auto_save_config();
                                     }
                                 }
                             }

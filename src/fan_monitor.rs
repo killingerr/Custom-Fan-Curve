@@ -106,6 +106,40 @@ impl FanMonitor {
         self.current_fan_curve = Some(curve);
     }
 
+    /// Load the current fan curve configuration from file
+    pub fn load_fan_curve_config(&mut self) -> Result<()> {
+        let config_path = crate::fan::FanCurveConfig::get_config_path();
+        
+        if config_path.exists() {
+            match crate::fan::FanCurveConfig::load_from_file(&config_path) {
+                Ok(config) => {
+                    if let Some(default_index) = config.default_curve_index {
+                        if default_index < config.curves.len() {
+                            self.current_fan_curve = Some(config.curves[default_index].clone());
+                            info!("Loaded fan curve configuration: {} (default)", 
+                                  config.curves[default_index].name());
+                        } else {
+                            warn!("Default curve index {} out of range, using first curve", default_index);
+                            self.current_fan_curve = Some(config.curves[0].clone());
+                        }
+                    } else {
+                        warn!("No default curve specified, using first curve");
+                        self.current_fan_curve = Some(config.curves[0].clone());
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to load fan curve config: {}, using default", e);
+                    self.current_fan_curve = Some(crate::fan::FanCurve::standard());
+                }
+            }
+        } else {
+            info!("No fan curve config found, using default");
+            self.current_fan_curve = Some(crate::fan::FanCurve::standard());
+        }
+        
+        Ok(())
+    }
+
     /// Start listening for fan curve change signals from the daemon
     pub async fn start_dbus_listener(&mut self) -> Result<()> {
         if let Some(ref connection) = self.dbus_connection {
@@ -482,6 +516,11 @@ pub async fn test_fan_curve(
 
     let mut monitor = FanMonitor::new();
     monitor.initialize()?;
+    
+    // Load fan curve configuration from file
+    if let Err(e) = monitor.load_fan_curve_config() {
+        warn!("Failed to load fan curve config: {}", e);
+    }
     
     // Initialize System76 Power client
     if let Err(e) = monitor.initialize_system76_power().await {

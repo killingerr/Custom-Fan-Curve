@@ -234,6 +234,54 @@ impl FanCurveConfig {
             .join(".fan_curve_app")
             .join("config.json")
     }
+
+    /// Validate that the configuration is properly saved and can be loaded
+    pub fn validate_persistence(&self) -> Result<()> {
+        let config_path = Self::get_config_path();
+        
+        // Save the current config
+        self.save_to_file(&config_path)?;
+        
+        // Try to load it back
+        let loaded_config = Self::load_from_file(&config_path)?;
+        
+        // Validate that the loaded config matches the current config
+        if loaded_config.curves.len() != self.curves.len() {
+            return Err(crate::errors::FanCurveError::Config(
+                "Curve count mismatch after save/load".to_string()
+            ));
+        }
+        
+        for (i, (original, loaded)) in self.curves.iter().zip(loaded_config.curves.iter()).enumerate() {
+            if original.name() != loaded.name() {
+                return Err(crate::errors::FanCurveError::Config(
+                    format!("Curve {} name mismatch after save/load", i)
+                ));
+            }
+            
+            if original.points().len() != loaded.points().len() {
+                return Err(crate::errors::FanCurveError::Config(
+                    format!("Curve {} point count mismatch after save/load", i)
+                ));
+            }
+            
+            for (j, (orig_point, load_point)) in original.points().iter().zip(loaded.points().iter()).enumerate() {
+                if orig_point.temp != load_point.temp || orig_point.duty != load_point.duty {
+                    return Err(crate::errors::FanCurveError::Config(
+                        format!("Curve {} point {} data mismatch after save/load", i, j)
+                    ));
+                }
+            }
+        }
+        
+        if self.default_curve_index != loaded_config.default_curve_index {
+            return Err(crate::errors::FanCurveError::Config(
+                "Default curve index mismatch after save/load".to_string()
+            ));
+        }
+        
+        Ok(())
+    }
 }
 
 impl Default for FanCurveConfig {
@@ -269,5 +317,43 @@ mod tests {
         assert_eq!(curve.calculate_duty_for_temperature_celsius(30.0), 2000);
         assert_eq!(curve.calculate_duty_for_temperature_celsius(70.0), 6000);
         assert_eq!(curve.calculate_duty_for_temperature_celsius(100.0), 10000);
+    }
+
+    #[test]
+    fn test_persistence_functionality() {
+        // Create a test configuration
+        let mut config = FanCurveConfig::new();
+        
+        // Add a custom fan curve
+        let mut custom_curve = FanCurve::new("Custom Test".to_string());
+        custom_curve.add_point(0, 0);
+        custom_curve.add_point(30, 2000);  // 20% at 30°C
+        custom_curve.add_point(50, 5000);  // 50% at 50°C
+        custom_curve.add_point(70, 8000);  // 80% at 70°C
+        custom_curve.add_point(90, 10000); // 100% at 90°C
+        
+        config.curves.push(custom_curve);
+        config.default_curve_index = Some(config.curves.len() - 1); // Set custom as default
+        
+        // Test save and load
+        let config_path = FanCurveConfig::get_config_path();
+        config.save_to_file(&config_path).expect("Failed to save config");
+        
+        let loaded_config = FanCurveConfig::load_from_file(&config_path).expect("Failed to load config");
+        
+        // Verify the loaded config matches the original
+        assert_eq!(loaded_config.curves.len(), config.curves.len());
+        assert_eq!(loaded_config.default_curve_index, config.default_curve_index);
+        
+        // Verify the custom curve was loaded correctly
+        let loaded_custom = loaded_config.curves.last().unwrap();
+        assert_eq!(loaded_custom.name(), "Custom Test");
+        assert_eq!(loaded_custom.points().len(), 5);
+        
+        // Test persistence validation
+        config.validate_persistence().expect("Persistence validation failed");
+        
+        // Clean up test file
+        let _ = std::fs::remove_file(&config_path);
     }
 }
