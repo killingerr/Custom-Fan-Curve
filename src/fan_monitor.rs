@@ -4,7 +4,7 @@ use crate::fan_detector::FanDetector;
 use crate::system76_power_client::System76PowerClient;
 use chrono::{DateTime, Local};
 use futures_util::stream::StreamExt;
-use log::{info, warn};
+use log::{error, info, warn};
 use rand;
 use std::fs;
 use std::time::Instant;
@@ -419,21 +419,29 @@ impl FanMonitor {
         let pwm_value = self.duty_to_pwm(duty);
         
         // Apply to all fans using the new set_duty method (matches system76-power approach)
-        if let Err(e) = self.fan_detector.set_duty(Some(pwm_value)) {
-            warn!("Failed to set fan PWM via set_duty: {}", e);
-            
-            // Fallback to individual CPU fan control
-            if let Some(cpu_fan) = self.fan_detector.get_cpu_fan() {
-                info!("Fallback: Applying direct PWM control to CPU fan {} -> PWM {}", 
-                      cpu_fan.fan_number, pwm_value);
-                if let Err(e) = self.fan_detector.set_fan_pwm(cpu_fan.fan_number, pwm_value) {
-                    warn!("Failed to set CPU fan PWM directly: {}", e);
-                }
-            } else {
-                warn!("No CPU fan found for direct PWM control");
+        match self.fan_detector.set_duty(Some(pwm_value)) {
+            Ok(()) => {
+                info!("✅ Successfully applied PWM control to all fans: {} (duty: {}%)", pwm_value, duty_percentage);
             }
-        } else {
-            info!("Applied PWM control to all fans: {} (duty: {})", pwm_value, duty);
+            Err(e) => {
+                error!("❌ Failed to set fan PWM via set_duty: {}", e);
+                
+                // Fallback to individual CPU fan control
+                if let Some(cpu_fan) = self.fan_detector.get_cpu_fan() {
+                    info!("🔄 Fallback: Applying direct PWM control to CPU fan {} -> PWM {}", 
+                          cpu_fan.fan_number, pwm_value);
+                    match self.fan_detector.set_fan_pwm(cpu_fan.fan_number, pwm_value) {
+                        Ok(()) => {
+                            info!("✅ Fallback successful: CPU fan {} PWM set to {}", cpu_fan.fan_number, pwm_value);
+                        }
+                        Err(fallback_e) => {
+                            error!("❌ Fallback failed: Could not set CPU fan PWM directly: {}", fallback_e);
+                        }
+                    }
+                } else {
+                    error!("❌ No CPU fan found for direct PWM control fallback");
+                }
+            }
         }
         
         Ok(())

@@ -356,4 +356,46 @@ mod tests {
         // Clean up test file
         let _ = std::fs::remove_file(&config_path);
     }
+
+    #[test]
+    fn test_100_percent_duty_calculation() {
+        // Create a test curve with 100% duty at 50°C
+        let mut curve = FanCurve::new("Test".to_string());
+        curve.add_point(0, 0);
+        curve.add_point(50, 10000); // 100% = 10000/10000 at 50°C
+        curve.add_point(100, 10000);
+        
+        // Test at exactly 50°C
+        let temp_50c = 50.0;
+        let temp_thousandths = (temp_50c * 1000.0) as u32; // 50000 thousandths
+        let duty = curve.calculate_duty_for_temperature(temp_thousandths);
+        
+        println!("Temperature: {}°C ({} thousandths)", temp_50c, temp_thousandths);
+        println!("Calculated duty: {} (should be 10000 for 100%)", duty);
+        println!("Duty percentage: {}%", duty / 100);
+        
+        // Test PWM conversion
+        let pwm = ((u32::from(duty) * 255) / 10000) as u8;
+        println!("PWM value: {} (should be 255 for 100%)", pwm);
+        
+        // Verify the calculations
+        assert_eq!(duty, 10000, "Duty should be 10000 for 100% at 50°C");
+        assert_eq!(pwm, 255, "PWM should be 255 for 100% duty");
+        
+        // Test at 51°C (should still be 100% due to interpolation)
+        let temp_51c = 51.0;
+        let temp_thousandths_51 = (temp_51c * 1000.0) as u32;
+        let duty_51 = curve.calculate_duty_for_temperature(temp_thousandths_51);
+        let pwm_51 = ((u32::from(duty_51) * 255) / 10000) as u8;
+        
+        println!("Temperature: {}°C", temp_51c);
+        println!("Calculated duty: {} (should be 10000 for 100%)", duty_51);
+        println!("Duty percentage: {}%", duty_51 / 100);
+        println!("PWM value: {} (should be 255 for 100%)", pwm_51);
+        
+        // At 51°C, it should interpolate between 50°C (100%) and 100°C (100%)
+        // So it should still be 100%
+        assert_eq!(duty_51, 10000, "Duty should be 10000 for 100% at 51°C");
+        assert_eq!(pwm_51, 255, "PWM should be 255 for 100% duty at 51°C");
+    }
 }

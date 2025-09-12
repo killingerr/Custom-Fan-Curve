@@ -290,11 +290,22 @@ impl FanDetector {
                 let pwm_enable_path = Path::new(&fan.hwmon_path).join(format!("pwm{}_enable", fan.fan_number));
                 
                 // Enable manual PWM control
-                let _ = fs::write(&pwm_enable_path, "1");
-                // Set PWM duty
-                let _ = fs::write(&pwm_path, &duty_str);
+                if let Err(e) = fs::write(&pwm_enable_path, "1") {
+                    warn!("Failed to enable PWM control for fan {} at {}: {}", 
+                          fan.fan_number, pwm_enable_path.display(), e);
+                    // Continue anyway - some systems don't require enable files
+                } else {
+                    info!("PWM control enabled for fan {}", fan.fan_number);
+                }
                 
-                info!("Fan {} PWM set to {}", fan.fan_number, duty);
+                // Set PWM duty
+                if let Err(e) = fs::write(&pwm_path, &duty_str) {
+                    warn!("Failed to set PWM duty for fan {} at {}: {}", 
+                          fan.fan_number, pwm_path.display(), e);
+                    return Err(crate::errors::FanCurveError::Io(e));
+                } else {
+                    info!("Fan {} PWM set to {} at {}", fan.fan_number, duty, pwm_path.display());
+                }
             }
         } else {
             info!("Enabling automatic fan control mode");
@@ -302,8 +313,12 @@ impl FanDetector {
             // Enable automatic mode for all fans
             for fan in &self.fans {
                 let pwm_enable_path = Path::new(&fan.hwmon_path).join(format!("pwm{}_enable", fan.fan_number));
-                let _ = fs::write(&pwm_enable_path, "2");
-                info!("Fan {} set to automatic mode", fan.fan_number);
+                if let Err(e) = fs::write(&pwm_enable_path, "2") {
+                    warn!("Failed to enable automatic mode for fan {} at {}: {}", 
+                          fan.fan_number, pwm_enable_path.display(), e);
+                } else {
+                    info!("Fan {} set to automatic mode", fan.fan_number);
+                }
             }
         }
         
