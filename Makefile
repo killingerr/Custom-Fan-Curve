@@ -103,3 +103,5 @@ quick: build run-gui
 # All-in-one build and test
 all: clean fmt clippy test release
 	@echo "Full build and test completed!"
+
+

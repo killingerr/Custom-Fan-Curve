@@ -66,7 +66,5 @@ pub enum FanCurveCommands {
     Test {
         /// Duration of test in seconds
         duration: u64,
-        /// Log file path (optional)
-        log_file: Option<String>,
     },
 }

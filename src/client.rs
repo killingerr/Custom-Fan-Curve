@@ -50,8 +50,8 @@ impl FanCurveClient {
             FanCurveCommands::RemovePoint => self.remove_fan_curve_point().await,
             FanCurveCommands::Save => self.save_config().await,
             FanCurveCommands::Load => self.load_config().await,
-            FanCurveCommands::Test { duration, log_file } => {
-                self.test_fan_curve(duration, log_file.as_deref()).await
+            FanCurveCommands::Test { duration } => {
+                self.test_fan_curve(duration).await
             }
         }
     }
@@ -142,18 +142,13 @@ impl FanCurveClient {
     }
 
     /// Test fan curve with monitoring
-    async fn test_fan_curve(&self, duration: u64, log_file: Option<&str>) -> Result<()> {
+    async fn test_fan_curve(&self, duration: u64) -> Result<()> {
         debug!("Testing fan curve for {} seconds", duration);
 
-        let log_path = log_file.map(std::path::Path::new);
-
         info!("Starting fan curve test for {} seconds", duration);
-        if let Some(path) = log_path {
-            info!("Logging fan data to: {}", path.display());
-        }
 
         // Run the fan curve test
-        fan_monitor::test_fan_curve("current", duration, log_path).await?;
+        fan_monitor::test_fan_curve("current", duration).await?;
 
         info!("Fan curve test completed");
         Ok(())

@@ -3,12 +3,13 @@ use crate::cpu_temp::CpuTempDetector;
 use crate::fan_detector::FanDetector;
 use crate::system76_power_client::System76PowerClient;
 use chrono::{DateTime, Local};
+use futures_util::stream::StreamExt;
 use log::{info, warn};
 use rand;
 use std::fs;
-use std::path::Path;
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
+use zbus::{Connection, MatchRule, MessageStream};
 
 /// Fan data point for monitoring
 #[derive(Debug, Clone)]
@@ -22,26 +23,26 @@ pub struct FanDataPoint {
 
 /// Fan monitoring system
 pub struct FanMonitor {
-    log_file: Option<std::path::PathBuf>,
     is_monitoring: bool,
     last_log_time: Instant,
     current_fan_curve: Option<crate::fan::FanCurve>,
     cpu_temp_detector: CpuTempDetector,
     fan_detector: FanDetector,
     system76_power_client: Option<System76PowerClient>,
+    dbus_connection: Option<Connection>,
 }
 
 impl FanMonitor {
     /// Create a new fan monitor
     pub fn new() -> Self {
         Self {
-            log_file: None,
             is_monitoring: false,
             last_log_time: Instant::now(),
             current_fan_curve: None,
             cpu_temp_detector: CpuTempDetector::new(),
             fan_detector: FanDetector::new(),
             system76_power_client: None,
+            dbus_connection: None,
         }
     }
 
@@ -80,6 +81,21 @@ impl FanMonitor {
         }
     }
 
+    /// Initialize DBus connection for listening to fan curve changes
+    pub async fn initialize_dbus(&mut self) -> Result<()> {
+        match Connection::system().await {
+            Ok(connection) => {
+                self.dbus_connection = Some(connection);
+                info!("DBus connection initialized for fan curve change notifications");
+                Ok(())
+            }
+            Err(e) => {
+                warn!("Failed to initialize DBus connection: {}", e);
+                Ok(()) // Don't fail initialization if DBus is not available
+            }
+        }
+    }
+
     /// Set the current fan curve for duty calculation
     pub fn set_fan_curve(&mut self, curve: crate::fan::FanCurve) {
         self.current_fan_curve = Some(curve);
@@ -90,24 +106,48 @@ impl FanMonitor {
         self.current_fan_curve = Some(curve);
     }
 
-    /// Start monitoring with logging to file
-    pub fn start_monitoring(&mut self, log_file: Option<&Path>) -> Result<()> {
-        self.log_file = log_file.map(|p| p.to_path_buf());
+    /// Start listening for fan curve change signals from the daemon
+    pub async fn start_dbus_listener(&mut self) -> Result<()> {
+        if let Some(ref connection) = self.dbus_connection {
+            // Create a match rule for fan curve changed signals
+            let match_rule = MatchRule::builder()
+                .msg_type(zbus::MessageType::Signal)
+                .sender("com.system76.FanCurveDaemon")?
+                .path("/com/system76/FanCurveDaemon")?
+                .member("fan_curve_changed")?
+                .build();
+
+            // Subscribe to the signal
+            let mut stream = MessageStream::for_match_rule(match_rule, &connection, None).await?;
+            
+            info!("Started listening for fan curve change signals");
+
+            // Spawn a task to handle incoming signals
+            tokio::spawn(async move {
+                while let Some(msg) = stream.next().await {
+                    if let Ok(_msg) = msg {
+                        info!("Received fan curve changed signal, updating curve...");
+                        
+                        // In a real implementation, we would fetch the current curve from the daemon
+                        // For now, we'll just log that we received the signal
+                        // TODO: Implement actual curve fetching from daemon
+                        info!("Fan curve change signal received - curve update needed");
+                    }
+                }
+            });
+
+            Ok(())
+        } else {
+            warn!("DBus connection not initialized, cannot listen for signals");
+            Ok(())
+        }
+    }
+
+    /// Start monitoring
+    pub fn start_monitoring(&mut self) -> Result<()> {
         self.is_monitoring = true;
         self.last_log_time = Instant::now();
-
-        if let Some(ref path) = self.log_file {
-            info!(
-                "Starting fan monitoring with logging to: {}",
-                path.display()
-            );
-            // Create log file with header
-            fs::write(path, "timestamp,temperature,fan_speed,fan_duty,cpu_usage\n")
-                .map_err(crate::errors::FanCurveError::Io)?;
-        } else {
-            info!("Starting fan monitoring without file logging");
-        }
-
+        info!("Starting fan monitoring");
         Ok(())
     }
 
@@ -208,44 +248,17 @@ impl FanMonitor {
                 .join(" | ")
         };
         
+        // Convert duty from ten-thousandths to percentage for display
+        let duty_percentage = data.fan_duty / 100;
+        
         println!("🌡️  Temperature: {:.1}°C | 🌀 Fans: {} | ⚡ Fan Duty: {}% | 💻 CPU: {:.1}% | ⏰ {}",
             data.temperature,
             fan_info,
-            data.fan_duty,
+            duty_percentage,
             data.cpu_usage,
             data.timestamp.format("%H:%M:%S")
         );
 
-        // Log to file if enabled
-        if let Some(ref path) = self.log_file {
-            let fan_speeds_str = if data.fan_speeds.is_empty() {
-                "No fans".to_string()
-            } else {
-                data.fan_speeds.iter()
-                    .map(|(_num, speed, label)| format!("{}:{}", label, speed))
-                    .collect::<Vec<_>>()
-                    .join(";")
-            };
-            
-            let csv_line = format!(
-                "{},{:.1},{},{},{:.1}\n",
-                data.timestamp.format("%Y-%m-%d %H:%M:%S%.3f"),
-                data.temperature,
-                fan_speeds_str,
-                data.fan_duty,
-                data.cpu_usage
-            );
-
-            fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .and_then(|mut file| {
-                    use std::io::Write;
-                    file.write_all(csv_line.as_bytes())
-                })
-                .map_err(crate::errors::FanCurveError::Io)?;
-        }
 
         Ok(())
     }
@@ -325,14 +338,25 @@ impl FanMonitor {
 
 
     /// Calculate fan duty based on the current fan curve
+    /// Returns duty in ten-thousandths (0-10000) to match system76-power standard
     fn calculate_fan_duty_from_curve(&self, temperature: f32) -> u16 {
         if let Some(ref curve) = self.current_fan_curve {
-            curve.calculate_duty_for_temperature(temperature)
+            // Convert Celsius to thousandths of Celsius
+            let temp_thousandths = (temperature * 1000.0) as u32;
+            curve.calculate_duty_for_temperature(temp_thousandths)
         } else {
             // Fallback to simple simulation if no curve is set
-            let duty = ((temperature - 30.0).max(0.0) * 2.0) as u16;
-            duty.min(100)
+            let duty_percent = ((temperature - 30.0).max(0.0) * 2.0) as u16;
+            let duty_percent = duty_percent.min(100);
+            // Convert percentage to ten-thousandths
+            (duty_percent * 100) as u16
         }
+    }
+
+    /// Calculate PWM value from duty (0-10000) to PWM (0-255)
+    /// Matches system76-power conversion: (duty * 255) / 10000
+    fn duty_to_pwm(&self, duty: u16) -> u8 {
+        ((u32::from(duty) * 255) / 10000) as u8
     }
 
     /// Apply fan curve to hardware via System76 Power DBus interface and direct PWM control
@@ -342,9 +366,11 @@ impl FanMonitor {
             return Ok(());
         }
 
-        let duty_percentage = self.calculate_fan_duty_from_curve(temperature);
+        let duty = self.calculate_fan_duty_from_curve(temperature);
+        let duty_percentage = duty / 100; // Convert ten-thousandths to percentage for display
         
-        info!("Applying fan curve: {:.1}°C -> {}% duty", temperature, duty_percentage);
+        info!("Applying fan curve: {:.1}°C -> {}% duty ({} ten-thousandths)", 
+              temperature, duty_percentage, duty);
         
         // Try to use System76 Power client if available (for power profiles)
         if let Some(ref client) = self.system76_power_client {
@@ -355,18 +381,25 @@ impl FanMonitor {
             warn!("System76 Power client not initialized");
         }
         
-        // Always try direct PWM control for precise fan control
-        // Convert percentage (0-100) to PWM value (0-255)
-        let pwm_value = ((duty_percentage as f32 / 100.0) * 255.0).round() as u8;
+        // Convert duty (0-10000) to PWM value (0-255) using system76-power formula
+        let pwm_value = self.duty_to_pwm(duty);
         
-        // Apply to CPU fan if available
-        if let Some(cpu_fan) = self.fan_detector.get_cpu_fan() {
-            info!("Applying direct PWM control: Fan {} -> PWM {}", cpu_fan.fan_number, pwm_value);
-            if let Err(e) = self.fan_detector.set_fan_pwm(cpu_fan.fan_number, pwm_value) {
-                warn!("Failed to set fan PWM directly: {}", e);
+        // Apply to all fans using the new set_duty method (matches system76-power approach)
+        if let Err(e) = self.fan_detector.set_duty(Some(pwm_value)) {
+            warn!("Failed to set fan PWM via set_duty: {}", e);
+            
+            // Fallback to individual CPU fan control
+            if let Some(cpu_fan) = self.fan_detector.get_cpu_fan() {
+                info!("Fallback: Applying direct PWM control to CPU fan {} -> PWM {}", 
+                      cpu_fan.fan_number, pwm_value);
+                if let Err(e) = self.fan_detector.set_fan_pwm(cpu_fan.fan_number, pwm_value) {
+                    warn!("Failed to set CPU fan PWM directly: {}", e);
+                }
+            } else {
+                warn!("No CPU fan found for direct PWM control");
             }
         } else {
-            warn!("No CPU fan found for direct PWM control");
+            info!("Applied PWM control to all fans: {} (duty: {})", pwm_value, duty);
         }
         
         Ok(())
@@ -432,15 +465,11 @@ impl Default for FanMonitor {
 pub async fn test_fan_curve(
     curve_name: &str,
     duration_seconds: u64,
-    log_file: Option<&Path>,
 ) -> Result<()> {
     println!(
         "🚀 Starting fan curve test: '{}' for {} seconds",
         curve_name, duration_seconds
     );
-    if let Some(path) = log_file {
-        println!("📁 Logging data to: {}", path.display());
-    }
     println!("⏱️  Real-time monitoring will begin in 3 seconds...\n");
 
     // Countdown
@@ -459,7 +488,17 @@ pub async fn test_fan_curve(
         warn!("Failed to initialize System76 Power client: {}", e);
     }
     
-    monitor.start_monitoring(log_file)?;
+    // Initialize DBus connection for fan curve change notifications
+    if let Err(e) = monitor.initialize_dbus().await {
+        warn!("Failed to initialize DBus connection: {}", e);
+    }
+    
+    // Start listening for fan curve changes
+    if let Err(e) = monitor.start_dbus_listener().await {
+        warn!("Failed to start DBus listener: {}", e);
+    }
+    
+    monitor.start_monitoring()?;
 
     // Start monitoring in background
     let monitor_handle = {
@@ -483,9 +522,6 @@ pub async fn test_fan_curve(
     monitor_handle.abort();
 
     println!("\n✅ Fan curve test completed!");
-    if let Some(path) = log_file {
-        println!("📊 Data saved to: {}", path.display());
-    }
 
     Ok(())
 }

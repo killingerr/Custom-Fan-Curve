@@ -224,6 +224,7 @@ impl FanDetector {
     }
 
     /// Set fan PWM duty (0-255, where 255 = 100%)
+    /// This method sets a specific fan's PWM value
     pub fn set_fan_pwm(&self, fan_number: u8, duty: u8) -> Result<()> {
         if let Some(fan) = self.fans.iter().find(|f| f.fan_number == fan_number) {
             let pwm_path = Path::new(&fan.hwmon_path).join(format!("pwm{}", fan_number));
@@ -273,6 +274,40 @@ impl FanDetector {
                 format!("Fan {} not found for PWM control", fan_number)
             ))
         }
+    }
+
+    /// Set duty cycle for all fans (0-255) - matches system76-power approach
+    /// If duty_opt is None, enables automatic mode (pwm1_enable = "2")
+    /// If duty_opt is Some(duty), sets all fans to the same duty value
+    pub fn set_duty(&self, duty_opt: Option<u8>) -> Result<()> {
+        if let Some(duty) = duty_opt {
+            let duty_str = format!("{}", duty);
+            info!("Setting all fans to PWM duty: {}", duty);
+            
+            // Set all available fans to the same duty
+            for fan in &self.fans {
+                let pwm_path = Path::new(&fan.hwmon_path).join(format!("pwm{}", fan.fan_number));
+                let pwm_enable_path = Path::new(&fan.hwmon_path).join(format!("pwm{}_enable", fan.fan_number));
+                
+                // Enable manual PWM control
+                let _ = fs::write(&pwm_enable_path, "1");
+                // Set PWM duty
+                let _ = fs::write(&pwm_path, &duty_str);
+                
+                info!("Fan {} PWM set to {}", fan.fan_number, duty);
+            }
+        } else {
+            info!("Enabling automatic fan control mode");
+            
+            // Enable automatic mode for all fans
+            for fan in &self.fans {
+                let pwm_enable_path = Path::new(&fan.hwmon_path).join(format!("pwm{}_enable", fan.fan_number));
+                let _ = fs::write(&pwm_enable_path, "2");
+                info!("Fan {} set to automatic mode", fan.fan_number);
+            }
+        }
+        
+        Ok(())
     }
 }
 

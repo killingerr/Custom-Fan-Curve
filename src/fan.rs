@@ -67,19 +67,25 @@ impl FanCurve {
         self.points.get(index)
     }
 
-    /// Calculate fan duty percentage for a given temperature using linear interpolation
-    pub fn calculate_duty_for_temperature(&self, temperature: f32) -> u16 {
+    /// Calculate fan duty for a given temperature using linear interpolation
+    /// Returns duty in ten-thousandths (0-10000) to match system76-power standard
+    /// Temperature is in thousandths of Celsius (e.g., 35000 = 35.0°C)
+    pub fn calculate_duty_for_temperature(&self, temp_thousandths: u32) -> u16 {
         if self.points.is_empty() {
             return 0;
         }
 
+        // Convert thousandths to tenths for comparison with curve points
+        // 30000 thousandths = 30.0°C = 30 tenths (if curve points are in tenths)
+        let temp_tenths = (temp_thousandths / 1000) as i16;
+
         // If temperature is below the lowest point, return the duty of the lowest point
-        if temperature <= self.points[0].temp as f32 {
+        if temp_tenths <= self.points[0].temp {
             return self.points[0].duty;
         }
 
         // If temperature is above the highest point, return the duty of the highest point
-        if temperature >= self.points.last().unwrap().temp as f32 {
+        if temp_tenths >= self.points.last().unwrap().temp {
             return self.points.last().unwrap().duty;
         }
 
@@ -88,15 +94,16 @@ impl FanCurve {
             let point1 = &self.points[i];
             let point2 = &self.points[i + 1];
 
-            if temperature >= point1.temp as f32 && temperature <= point2.temp as f32 {
+            if temp_tenths >= point1.temp && temp_tenths <= point2.temp {
                 // Linear interpolation between the two points
                 let temp1 = point1.temp as f32;
                 let temp2 = point2.temp as f32;
                 let duty1 = point1.duty as f32;
                 let duty2 = point2.duty as f32;
+                let temp_current = temp_tenths as f32;
 
                 // Calculate the interpolation factor
-                let factor = (temperature - temp1) / (temp2 - temp1);
+                let factor = (temp_current - temp1) / (temp2 - temp1);
 
                 // Interpolate the duty
                 let interpolated_duty = duty1 + factor * (duty2 - duty1);
@@ -109,63 +116,71 @@ impl FanCurve {
         0
     }
 
+    /// Calculate fan duty percentage for a given temperature using linear interpolation
+    /// This is a convenience method that maintains backward compatibility
+    pub fn calculate_duty_for_temperature_celsius(&self, temperature: f32) -> u16 {
+        // Convert Celsius to thousandths of Celsius
+        let temp_thousandths = (temperature * 1000.0) as u32;
+        self.calculate_duty_for_temperature(temp_thousandths)
+    }
+
     pub fn standard() -> Self {
         let mut curve = Self::new("Standard".to_string());
         curve.add_point(0, 0);
-        curve.add_point(30, 20);
-        curve.add_point(40, 30);
-        curve.add_point(50, 40);
-        curve.add_point(60, 50);
-        curve.add_point(70, 60);
-        curve.add_point(80, 70);
-        curve.add_point(90, 80);
-        curve.add_point(100, 100);
+        curve.add_point(30, 2000);  // 20% = 2000/10000
+        curve.add_point(40, 3000);  // 30% = 3000/10000
+        curve.add_point(50, 4000);  // 40% = 4000/10000
+        curve.add_point(60, 5000);  // 50% = 5000/10000
+        curve.add_point(70, 6000);  // 60% = 6000/10000
+        curve.add_point(80, 7000);  // 70% = 7000/10000
+        curve.add_point(90, 8000);  // 80% = 8000/10000
+        curve.add_point(100, 10000); // 100% = 10000/10000
         curve
     }
 
     pub fn threadripper2() -> Self {
         let mut curve = Self::new("Threadripper 2".to_string());
         curve.add_point(0, 0);
-        curve.add_point(25, 10);
-        curve.add_point(35, 20);
-        curve.add_point(45, 30);
-        curve.add_point(55, 40);
-        curve.add_point(65, 50);
-        curve.add_point(75, 60);
-        curve.add_point(85, 70);
-        curve.add_point(95, 80);
-        curve.add_point(100, 100);
+        curve.add_point(25, 1000);  // 10% = 1000/10000
+        curve.add_point(35, 2000);  // 20% = 2000/10000
+        curve.add_point(45, 3000);  // 30% = 3000/10000
+        curve.add_point(55, 4000);  // 40% = 4000/10000
+        curve.add_point(65, 5000);  // 50% = 5000/10000
+        curve.add_point(75, 6000);  // 60% = 6000/10000
+        curve.add_point(85, 7000);  // 70% = 7000/10000
+        curve.add_point(95, 8000);  // 80% = 8000/10000
+        curve.add_point(100, 10000); // 100% = 10000/10000
         curve
     }
 
     pub fn hedt() -> Self {
         let mut curve = Self::new("HEDT".to_string());
         curve.add_point(0, 0);
-        curve.add_point(20, 15);
-        curve.add_point(30, 25);
-        curve.add_point(40, 35);
-        curve.add_point(50, 45);
-        curve.add_point(60, 55);
-        curve.add_point(70, 65);
-        curve.add_point(80, 75);
-        curve.add_point(90, 85);
-        curve.add_point(100, 100);
+        curve.add_point(20, 1500);  // 15% = 1500/10000
+        curve.add_point(30, 2500);  // 25% = 2500/10000
+        curve.add_point(40, 3500);  // 35% = 3500/10000
+        curve.add_point(50, 4500);  // 45% = 4500/10000
+        curve.add_point(60, 5500);  // 55% = 5500/10000
+        curve.add_point(70, 6500);  // 65% = 6500/10000
+        curve.add_point(80, 7500);  // 75% = 7500/10000
+        curve.add_point(90, 8500);  // 85% = 8500/10000
+        curve.add_point(100, 10000); // 100% = 10000/10000
         curve
     }
 
     pub fn xeon() -> Self {
         let mut curve = Self::new("Xeon".to_string());
         curve.add_point(0, 0);
-        curve.add_point(15, 5);
-        curve.add_point(25, 15);
-        curve.add_point(35, 25);
-        curve.add_point(45, 35);
-        curve.add_point(55, 45);
-        curve.add_point(65, 55);
-        curve.add_point(75, 65);
-        curve.add_point(85, 75);
-        curve.add_point(95, 85);
-        curve.add_point(100, 100);
+        curve.add_point(15, 500);   // 5% = 500/10000
+        curve.add_point(25, 1500);  // 15% = 1500/10000
+        curve.add_point(35, 2500);  // 25% = 2500/10000
+        curve.add_point(45, 3500);  // 35% = 3500/10000
+        curve.add_point(55, 4500);  // 45% = 4500/10000
+        curve.add_point(65, 5500);  // 55% = 5500/10000
+        curve.add_point(75, 6500);  // 65% = 6500/10000
+        curve.add_point(85, 7500);  // 75% = 7500/10000
+        curve.add_point(95, 8500);  // 85% = 8500/10000
+        curve.add_point(100, 10000); // 100% = 10000/10000
         curve
     }
 
@@ -235,18 +250,24 @@ mod tests {
     fn test_fan_curve_interpolation() {
         let curve = FanCurve::standard();
 
-        // Test exact points
-        assert_eq!(curve.calculate_duty_for_temperature(0.0), 0);
-        assert_eq!(curve.calculate_duty_for_temperature(30.0), 20);
-        assert_eq!(curve.calculate_duty_for_temperature(70.0), 60);
-        assert_eq!(curve.calculate_duty_for_temperature(100.0), 100);
+        // Test exact points (using thousandths of Celsius)
+        assert_eq!(curve.calculate_duty_for_temperature(0), 0);
+        assert_eq!(curve.calculate_duty_for_temperature(30000), 2000); // 30°C = 20%
+        assert_eq!(curve.calculate_duty_for_temperature(70000), 6000); // 70°C = 60%
+        assert_eq!(curve.calculate_duty_for_temperature(100000), 10000); // 100°C = 100%
 
         // Test interpolation between points
-        assert_eq!(curve.calculate_duty_for_temperature(35.0), 25); // Between 30°C(20%) and 40°C(30%)
-        assert_eq!(curve.calculate_duty_for_temperature(65.0), 55); // Between 60°C(50%) and 70°C(60%)
+        assert_eq!(curve.calculate_duty_for_temperature(35000), 2500); // Between 30°C(20%) and 40°C(30%)
+        assert_eq!(curve.calculate_duty_for_temperature(65000), 5500); // Between 60°C(50%) and 70°C(60%)
 
         // Test edge cases
-        assert_eq!(curve.calculate_duty_for_temperature(-10.0), 0); // Below minimum
-        assert_eq!(curve.calculate_duty_for_temperature(150.0), 100); // Above maximum
+        assert_eq!(curve.calculate_duty_for_temperature(0), 0); // Below minimum (0°C)
+        assert_eq!(curve.calculate_duty_for_temperature(150000), 10000); // Above maximum (150°C)
+
+        // Test backward compatibility with Celsius
+        assert_eq!(curve.calculate_duty_for_temperature_celsius(0.0), 0);
+        assert_eq!(curve.calculate_duty_for_temperature_celsius(30.0), 2000);
+        assert_eq!(curve.calculate_duty_for_temperature_celsius(70.0), 6000);
+        assert_eq!(curve.calculate_duty_for_temperature_celsius(100.0), 10000);
     }
 }

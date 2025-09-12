@@ -9,7 +9,7 @@ use crate::{
 use log::{debug, error, info};
 use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration};
-use zbus::{dbus_interface, ConnectionBuilder};
+use zbus::{dbus_interface, ConnectionBuilder, SignalContext};
 
 /// Main daemon structure
 pub struct FanCurveDaemon {
@@ -71,6 +71,13 @@ impl FanCurveDaemon {
             .map_err(|e| FanCurveError::Config(format!("Failed to save config: {}", e)))
     }
 
+    /// Send a fan curve changed signal
+    async fn send_fan_curve_changed_signal(&self) {
+        // For now, just log that we would send a signal
+        // TODO: Implement proper signal sending when signal context is available
+        info!("Fan curve changed - signal would be sent to fan monitor");
+    }
+
     /// Run the daemon
     pub async fn run(self) -> Result<()> {
         info!("Starting fan curve daemon");
@@ -92,6 +99,12 @@ impl FanCurveDaemon {
 
 #[dbus_interface(name = "com.system76.FanCurveDaemon")]
 impl FanCurveDaemon {
+    /// Signal emitted when fan curve changes
+    #[dbus_interface(signal)]
+    async fn fan_curve_changed(&self, signal_ctx: &SignalContext<'_>) -> zbus::Result<()> {
+        info!("Emitting fan curve changed signal");
+        Ok(())
+    }
     /// Get all available fan curves
     async fn get_fan_curves(&self) -> zbus::fdo::Result<Vec<FanCurve>> {
         debug!("Getting fan curves");
@@ -110,27 +123,44 @@ impl FanCurveDaemon {
     /// Set current fan curve by index
     async fn set_fan_curve(&self, index: u32) -> zbus::fdo::Result<()> {
         debug!("Setting fan curve to index {}", index);
-        let mut current_index = self.current_curve_index.lock().unwrap();
-        let config = self.config.lock().unwrap();
+        let curve_name = {
+            let mut current_index = self.current_curve_index.lock().unwrap();
+            let config = self.config.lock().unwrap();
 
-        if index as usize >= config.curves.len() {
-            return Err(zbus_error_from_display("Invalid fan curve index"));
-        }
+            if index as usize >= config.curves.len() {
+                return Err(zbus_error_from_display("Invalid fan curve index"));
+            }
 
-        *current_index = index as usize;
-        info!("Fan curve set to: {}", config.curves[*current_index].name());
+            *current_index = index as usize;
+            config.curves[*current_index].name().to_string()
+        };
+        
+        info!("Fan curve set to: {}", curve_name);
+        
+        // Emit signal to notify fan monitor of the change
+        self.send_fan_curve_changed_signal().await;
+        
         Ok(())
     }
 
     /// Set fan curve by name
     async fn set_fan_curve_by_name(&self, name: &str) -> zbus::fdo::Result<()> {
         debug!("Setting fan curve to name: {}", name);
-        let config = self.config.lock().unwrap();
+        let found = {
+            let config = self.config.lock().unwrap();
+            config.curves.iter().position(|c| c.name() == name)
+        };
 
-        if let Some(index) = config.curves.iter().position(|c| c.name() == name) {
-            let mut current_index = self.current_curve_index.lock().unwrap();
-            *current_index = index;
+        if let Some(index) = found {
+            {
+                let mut current_index = self.current_curve_index.lock().unwrap();
+                *current_index = index;
+            }
             info!("Fan curve set to: {}", name);
+            
+            // Emit signal to notify fan monitor of the change
+            self.send_fan_curve_changed_signal().await;
+            
             Ok(())
         } else {
             Err(zbus_error_from_display(format!(
@@ -175,13 +205,19 @@ impl FanCurveDaemon {
             return Err(zbus_error_from_display("Invalid fan curve point values"));
         }
 
-        let mut config = self.config.lock().unwrap();
-        let current_index = self.current_curve_index.lock().unwrap();
+        let valid_index = {
+            let mut config = self.config.lock().unwrap();
+            let current_index = self.current_curve_index.lock().unwrap();
 
-        if *current_index < config.curves.len() {
-            config.curves[*current_index].add_point(temp, duty);
-            drop(config);
+            if *current_index < config.curves.len() {
+                config.curves[*current_index].add_point(temp, duty);
+                true
+            } else {
+                false
+            }
+        };
 
+        if valid_index {
             if let Err(e) = self.save_config_internal() {
                 error!("Failed to save config: {}", e);
                 return Err(zbus_error_from_display(format!(
@@ -191,6 +227,10 @@ impl FanCurveDaemon {
             }
 
             info!("Added fan curve point: {}°C -> {}%", temp, duty);
+            
+            // Emit signal to notify fan monitor of the change
+            self.send_fan_curve_changed_signal().await;
+            
             Ok(())
         } else {
             Err(zbus_error_from_display("Invalid current fan curve index"))
@@ -201,28 +241,34 @@ impl FanCurveDaemon {
     async fn remove_fan_curve_point(&self) -> zbus::fdo::Result<()> {
         debug!("Removing last fan curve point");
 
-        let mut config = self.config.lock().unwrap();
-        let current_index = self.current_curve_index.lock().unwrap();
+        let point_removed = {
+            let mut config = self.config.lock().unwrap();
+            let current_index = self.current_curve_index.lock().unwrap();
 
-        if *current_index < config.curves.len() {
-            if let Some(_point) = config.curves[*current_index].remove_last_point() {
-                drop(config);
-
-                if let Err(e) = self.save_config_internal() {
-                    error!("Failed to save config: {}", e);
-                    return Err(zbus_error_from_display(format!(
-                        "Failed to save config: {}",
-                        e
-                    )));
-                }
-
-                info!("Removed last fan curve point");
-                Ok(())
+            if *current_index < config.curves.len() {
+                config.curves[*current_index].remove_last_point().is_some()
             } else {
-                Err(zbus_error_from_display("No points to remove"))
+                return Err(zbus_error_from_display("Invalid current fan curve index"));
             }
+        };
+
+        if point_removed {
+            if let Err(e) = self.save_config_internal() {
+                error!("Failed to save config: {}", e);
+                return Err(zbus_error_from_display(format!(
+                    "Failed to save config: {}",
+                    e
+                )));
+            }
+
+            info!("Removed last fan curve point");
+            
+            // Emit signal to notify fan monitor of the change
+            self.send_fan_curve_changed_signal().await;
+            
+            Ok(())
         } else {
-            Err(zbus_error_from_display("Invalid current fan curve index"))
+            Err(zbus_error_from_display("No points to remove"))
         }
     }
 
