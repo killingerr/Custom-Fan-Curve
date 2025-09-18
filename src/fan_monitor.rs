@@ -1,5 +1,6 @@
 use crate::errors::Result;
 use crate::cpu_temp::CpuTempDetector;
+use crate::fan_control::FanController;
 use crate::fan_detector::FanDetector;
 use crate::system76_power_client::System76PowerClient;
 use chrono::{DateTime, Local};
@@ -27,6 +28,7 @@ pub struct FanMonitor {
     last_log_time: Instant,
     current_fan_curve: Option<crate::fan::FanCurve>,
     cpu_temp_detector: CpuTempDetector,
+    fan_controller: FanController,
     fan_detector: FanDetector,
     system76_power_client: Option<System76PowerClient>,
     dbus_connection: Option<Connection>,
@@ -40,6 +42,7 @@ impl FanMonitor {
             last_log_time: Instant::now(),
             current_fan_curve: None,
             cpu_temp_detector: CpuTempDetector::new(),
+            fan_controller: FanController::new(),
             fan_detector: FanDetector::new(),
             system76_power_client: None,
             dbus_connection: None,
@@ -56,6 +59,11 @@ impl FanMonitor {
         // Initialize fan detection
         if let Err(e) = self.fan_detector.initialize() {
             warn!("Failed to initialize fan detection: {}", e);
+        }
+        
+        // Initialize fan controller for PWM control
+        if let Err(e) = self.fan_controller.initialize() {
+            warn!("Failed to initialize fan controller: {}", e);
         }
         
         info!("Fan monitor initialized with {} fans detected", self.fan_detector.fan_count());
@@ -136,7 +144,7 @@ impl FanMonitor {
             info!("No fan curve config found, using default");
             self.current_fan_curve = Some(crate::fan::FanCurve::standard());
         }
-        
+
         Ok(())
     }
 
@@ -226,6 +234,13 @@ impl FanMonitor {
         let fan_duty = self.calculate_fan_duty_from_curve(temperature);
         let cpu_usage = self.read_cpu_usage()?;
 
+        // Apply fan curve to hardware if controller is available
+        if self.fan_controller.is_initialized() {
+            if let Err(e) = self.fan_controller.set_fan_duty(fan_duty as u8) {
+                warn!("Failed to set fan duty: {}", e);
+            }
+        }
+
         Ok(FanDataPoint {
             timestamp: chrono::Local::now(),
             temperature,
@@ -242,6 +257,13 @@ impl FanMonitor {
         let fan_speeds = self.read_fan_speeds()?;
         let fan_duty = self.calculate_fan_duty_from_curve(temperature);
         let cpu_usage = self.read_cpu_usage()?;
+
+        // Apply fan curve to hardware if controller is available
+        if self.fan_controller.is_initialized() {
+            if let Err(e) = self.fan_controller.set_fan_duty(fan_duty as u8) {
+                warn!("Failed to set fan duty: {}", e);
+            }
+        }
 
         Ok(FanDataPoint {
             timestamp: chrono::Local::now(),

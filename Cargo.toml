@@ -22,6 +22,7 @@ tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "time", "si
 zbus = { version = "3.15.2", default-features = false, features = ["tokio"] }
 zbus_polkit = { version = "3.0.0", features = ["tokio"] }
 zvariant = "3.15.2"
+env_logger = "0.10"
 
 
 
@@ -30,3 +31,7 @@ winapi = { version = "0.3", features = ["winuser"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = "0.9.0"
+
+[[bin]]
+name = "debug_pwm"
+path = "debug_pwm.rs"
