@@ -23,7 +23,9 @@ CONFIG_DIR="$HOME/.fan_curve_app"
 DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons"
 REPO_URL="https://github.com/tonysystem76/Fan-Curve-App.git"
+SYSTEM76_POWER_REPO_URL="https://github.com/tonysystem76/system76-power.git"
 TEMP_DIR="/tmp/fan-curve-app-install"
+SYSTEM76_POWER_TEMP_DIR="/tmp/system76-power-install"
 
 # Functions
 print_header() {
@@ -294,6 +296,55 @@ EOF
     print_success "Desktop entry created"
 }
 
+install_system76_power_fork() {
+    print_step "Installing custom system76-power fork..."
+    
+    # Check if system76-power service is running
+    if systemctl --user is-active --quiet system76-power; then
+        print_status "Stopping current system76-power service..."
+        systemctl --user stop system76-power
+    fi
+    
+    # Disable the service temporarily
+    if systemctl --user is-enabled --quiet system76-power; then
+        print_status "Disabling system76-power service..."
+        systemctl --user disable system76-power
+    fi
+    
+    # Clean up any existing temp directory
+    rm -rf "$SYSTEM76_POWER_TEMP_DIR"
+    
+    # Clone the custom system76-power repository
+    print_status "Cloning custom system76-power repository..."
+    git clone "$SYSTEM76_POWER_REPO_URL" "$SYSTEM76_POWER_TEMP_DIR"
+    cd "$SYSTEM76_POWER_TEMP_DIR"
+    
+    # Build system76-power in release mode
+    print_status "Building custom system76-power (this may take a few minutes)..."
+    cargo build --release
+    
+    # Install the custom system76-power
+    print_status "Installing custom system76-power..."
+    sudo cargo install --path . --force
+    
+    # Start the custom system76-power service
+    print_status "Starting custom system76-power service..."
+    systemctl --user start system76-power
+    
+    # Enable it to start on boot
+    print_status "Enabling system76-power to start on boot..."
+    systemctl --user enable system76-power
+    
+    # Verify it's running
+    if systemctl --user is-active --quiet system76-power; then
+        print_success "Custom system76-power is running successfully"
+    else
+        print_warning "system76-power service may not be running. Check with: systemctl --user status system76-power"
+    fi
+    
+    print_success "Custom system76-power installation completed"
+}
+
 create_uninstall_script() {
     print_step "Creating uninstall script..."
     
@@ -332,6 +383,7 @@ EOF
 cleanup() {
     print_step "Cleaning up temporary files..."
     rm -rf "$TEMP_DIR"
+    rm -rf "$SYSTEM76_POWER_TEMP_DIR"
     print_success "Cleanup completed"
 }
 
@@ -345,6 +397,7 @@ show_usage() {
     echo "  --no-gui         Skip desktop entry creation"
     echo "  --no-deps        Skip dependency installation"
     echo "  --no-icon        Skip icon installation"
+    echo "  --no-system76    Skip custom system76-power installation"
     echo "  --local          Install to local directory instead of system"
     echo ""
     echo "Examples:"
@@ -352,6 +405,7 @@ show_usage() {
     echo "  $0 --local            # Install to local directory"
     echo "  $0 --no-gui          # Install without desktop entry"
     echo "  $0 --no-deps         # Skip dependency installation"
+    echo "  $0 --no-system76     # Skip custom system76-power installation"
 }
 
 show_completion_message() {
@@ -373,6 +427,11 @@ show_completion_message() {
         echo "  Icon: $ICON_DIR/fan-curve-app.svg"
     fi
     echo ""
+    echo -e "${CYAN}System76 Power:${NC}"
+    echo "  Custom system76-power has been installed and is running"
+    echo "  Check status: systemctl --user status system76-power"
+    echo "  Restart if needed: systemctl --user restart system76-power"
+    echo ""
     echo -e "${CYAN}To uninstall:${NC}"
     echo "  $HOME/uninstall-fan-curve-app.sh"
     echo ""
@@ -384,6 +443,7 @@ main() {
     local skip_gui=false
     local skip_deps=false
     local skip_icon=false
+    local skip_system76=false
     local local_install=false
     
     # Parse command line arguments
@@ -403,6 +463,10 @@ main() {
                 ;;
             --no-icon)
                 skip_icon=true
+                shift
+                ;;
+            --no-system76)
+                skip_system76=true
                 shift
                 ;;
             --local)
@@ -437,6 +501,10 @@ main() {
     
     if [ "$skip_gui" = false ]; then
         create_desktop_entry
+    fi
+    
+    if [ "$skip_system76" = false ]; then
+        install_system76_power_fork
     fi
     
     create_uninstall_script
