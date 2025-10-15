@@ -24,6 +24,7 @@ DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons"
 REPO_URL="https://github.com/tonysystem76/Fan-Curve-App.git"
 TEMP_DIR="/tmp/fan-curve-app-install"
+S76_POWER_TEMP_DIR="/tmp/system76-power-install"
 
 # Functions
 print_header() {
@@ -136,6 +137,15 @@ install_dependencies() {
     print_success "Dependencies installed"
 }
 
+install_system76_power() {
+    print_step "Installing System76 Power..."
+    git clone https://github.com/tonysystem76/system76-power.git "$S76_POWER_TEMP_DIR/system76-power"
+    cd "$S76_POWER_TEMP_DIR/system76-power"
+    dpkg-buildpackage -us -uc
+    sudo dpkg -i system76-power_*.deb
+    print_success "System76 Power installed successfully"
+}
+
 download_and_build() {
     print_step "Downloading and building $APP_NAME..."
     
@@ -175,7 +185,7 @@ install_application() {
 setup_configuration() {
     print_step "Setting up configuration directory..."
     
-    # Create config directory
+    # Create config direc tory
     mkdir -p "$CONFIG_DIR"
     
     # Create default config if it doesn't exist
@@ -425,6 +435,7 @@ main() {
     
     if [ "$skip_deps" = false ]; then
         install_dependencies
+        install_system76_power
     fi
     
     download_and_build
