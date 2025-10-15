@@ -142,7 +142,7 @@ install_system76_power() {
     git clone https://github.com/tonysystem76/system76-power.git "$S76_POWER_TEMP_DIR/system76-power"
     cd "$S76_POWER_TEMP_DIR/system76-power"
     dpkg-buildpackage -us -uc
-    sudo dpkg -i system76-power_*.deb
+    sudo dpkg -i ../system76-power_*.deb
     print_success "System76 Power installed successfully"
 }
 
