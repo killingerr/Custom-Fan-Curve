@@ -103,7 +103,7 @@ install_dependencies() {
         # Debian/Ubuntu
         print_status "Detected apt package manager (Debian/Ubuntu)"
         sudo apt-get update
-        sudo apt-get install -y build-essential pkg-config libssl-dev libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev git curl
+        sudo apt-get install -y build-essential pkg-config cargo libssl-dev libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libdbus-1-dev libegl1 libgl1 mesa-utils libusb-1.0-0-dev devscripts debhelper git curl
     elif command -v yum &> /dev/null; then
         # RHEL/CentOS
         print_status "Detected yum package manager (RHEL/CentOS)"
