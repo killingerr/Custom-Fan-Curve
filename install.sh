@@ -157,9 +157,9 @@ download_and_build() {
     git clone "$REPO_URL" "$TEMP_DIR"
     cd "$TEMP_DIR"
     
-    # Build in release mode
-    print_status "Building application (this may take a few minutes)..."
-    cargo build --release
+    # Build in release mode with locked dependencies
+    print_status "Building application with locked deps (this may take a few minutes)..."
+    cargo build --release --locked
     
     print_success "Application built successfully"
 }

@@ -8,6 +8,15 @@ use fan_curve_app::{
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Print version and build metadata for binary identity verification
+    let pkg_version = env!("CARGO_PKG_VERSION");
+    let git_hash = option_env!("GIT_HASH").unwrap_or("unknown");
+    let git_desc = option_env!("GIT_DESC").unwrap_or("unknown");
+    let build_time = option_env!("BUILD_TIME").unwrap_or("unknown");
+    eprintln!(
+        "fan-curve-app v{} (git {} / {}) built {}",
+        pkg_version, git_hash, git_desc, build_time
+    );
     // Parse command line arguments
     let args = Args::parse();
 
