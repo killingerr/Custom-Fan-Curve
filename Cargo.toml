@@ -33,3 +33,14 @@ x11rb = "0.9.0"
 
 [build-dependencies]
 chrono = "0.4"
+
+[profile.release]
+# Enable static linking to avoid dependency conflicts
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Static linking for better compatibility
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+crt-static"]

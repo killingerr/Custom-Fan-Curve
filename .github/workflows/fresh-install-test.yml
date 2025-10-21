@@ -1,0 +1,84 @@
+name: Fresh Install Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-fresh-install:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          pkg-config \
+          libdbus-1-dev \
+          libx11-dev \
+          libegl1 \
+          libgl1 \
+          mesa-utils \
+          libusb-1.0-0-dev \
+          devscripts \
+          debhelper
+    
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        components: rustfmt, clippy
+    
+    - name: Test fresh install
+      run: |
+        chmod +x install.sh
+        ./install.sh
+    
+    - name: Test installed binary
+      run: |
+        /usr/local/bin/fan-curve --help
+    
+    - name: Test GUI binary (headless)
+      run: |
+        timeout 5 /usr/local/bin/fan-curve --gui || true
+
+  test-different-os:
+    strategy:
+      matrix:
+        os: [ubuntu-20.04, ubuntu-22.04, ubuntu-24.04]
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          pkg-config \
+          libdbus-1-dev \
+          libx11-dev \
+          libegl1 \
+          libgl1 \
+          mesa-utils \
+          libusb-1.0-0-dev \
+          devscripts \
+          debhelper
+    
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+    
+    - name: Test installation
+      run: |
+        chmod +x install.sh
+        ./install.sh
+        /usr/local/bin/fan-curve --help

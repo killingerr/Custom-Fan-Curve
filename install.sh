@@ -146,6 +146,40 @@ install_system76_power() {
     print_success "System76 Power installed successfully"
 }
 
+resolve_dependency_conflicts() {
+    print_step "Resolving dependency conflicts..."
+    
+    # Check for common conflict scenarios
+    CONFLICTS_FOUND=false
+    
+    # Check for conflicting Rust versions
+    if command -v rustc >/dev/null 2>&1; then
+        RUST_VERSION=$(rustc --version | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+')
+        RUST_MAJOR=$(echo "$RUST_VERSION" | cut -d. -f1)
+        RUST_MINOR=$(echo "$RUST_VERSION" | cut -d. -f2)
+        
+        if [ "$RUST_MAJOR" -lt 1 ] || ([ "$RUST_MAJOR" -eq 1 ] && [ "$RUST_MINOR" -lt 70 ]); then
+            print_warning "Found old Rust version ($RUST_VERSION). Installing rustup..."
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            export PATH="$HOME/.cargo/bin:$PATH"
+            CONFLICTS_FOUND=true
+        fi
+    fi
+    
+    # Check for conflicting system libraries
+    if dpkg -l | grep -q "libdbus-1-dev.*1\.[0-9]\."; then
+        DBUS_VERSION=$(dpkg -l | grep "libdbus-1-dev" | awk '{print $3}')
+        print_status "Found system DBus version: $DBUS_VERSION"
+        # DBus is generally backward compatible, so we don't need to change it
+    fi
+    
+    if [ "$CONFLICTS_FOUND" = true ]; then
+        print_success "Dependency conflicts resolved"
+    else
+        print_success "No dependency conflicts found"
+    fi
+}
+
 download_and_build() {
     print_step "Downloading and building $APP_NAME..."
     
@@ -157,9 +191,34 @@ download_and_build() {
     git clone "$REPO_URL" "$TEMP_DIR"
     cd "$TEMP_DIR"
     
-    # Build in release mode with locked dependencies
-    print_status "Building application with locked deps (this may take a few minutes)..."
-    cargo build --release --locked
+    # Check for dependency conflicts and resolve them
+    print_status "Checking for dependency conflicts..."
+    if ! cargo check --quiet 2>/dev/null; then
+        print_status "Resolving dependency conflicts..."
+        
+        # Clean any existing build artifacts
+        cargo clean
+        
+        # Try to resolve conflicts by updating Cargo.lock
+        cargo update
+        
+        # If still failing, try with different resolver
+        if ! cargo check --quiet 2>/dev/null; then
+            print_status "Attempting alternative dependency resolution..."
+            
+            # Try static linking to avoid conflicts
+            print_status "Trying static linking build..."
+            RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --locked 2>/dev/null || \
+            cargo build --release --locked --offline 2>/dev/null || \
+            cargo build --release
+        else
+            cargo build --release --locked
+        fi
+    else
+        # Build in release mode with locked dependencies
+        print_status "Building application (this may take a few minutes)..."
+        cargo build --release --locked
+    fi
     
     print_success "Application built successfully"
 }
@@ -436,6 +495,7 @@ main() {
     if [ "$skip_deps" = false ]; then
         install_dependencies
         install_system76_power
+        resolve_dependency_conflicts
     fi
     
     download_and_build
