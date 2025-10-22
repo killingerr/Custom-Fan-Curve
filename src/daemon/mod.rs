@@ -134,12 +134,12 @@ impl FanCurveDaemon {
             *current_index = index as usize;
             config.curves[*current_index].name().to_string()
         };
-        
+
         info!("Fan curve set to: {}", curve_name);
-        
+
         // Emit signal to notify fan monitor of the change
         self.send_fan_curve_changed_signal().await;
-        
+
         Ok(())
     }
 
@@ -157,10 +157,10 @@ impl FanCurveDaemon {
                 *current_index = index;
             }
             info!("Fan curve set to: {}", name);
-            
+
             // Emit signal to notify fan monitor of the change
             self.send_fan_curve_changed_signal().await;
-            
+
             Ok(())
         } else {
             Err(zbus_error_from_display(format!(
@@ -227,10 +227,10 @@ impl FanCurveDaemon {
             }
 
             info!("Added fan curve point: {}°C -> {}%", temp, duty);
-            
+
             // Emit signal to notify fan monitor of the change
             self.send_fan_curve_changed_signal().await;
-            
+
             Ok(())
         } else {
             Err(zbus_error_from_display("Invalid current fan curve index"))
@@ -262,10 +262,10 @@ impl FanCurveDaemon {
             }
 
             info!("Removed last fan curve point");
-            
+
             // Emit signal to notify fan monitor of the change
             self.send_fan_curve_changed_signal().await;
-            
+
             Ok(())
         } else {
             Err(zbus_error_from_display("No points to remove"))

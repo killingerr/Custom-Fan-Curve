@@ -16,7 +16,9 @@ use zbus::{Connection, MatchRule, MessageStream};
 pub struct FanDataPoint {
     pub timestamp: DateTime<Local>,
     pub temperature: f32,
-    pub fan_speeds: Vec<(u8, u16, String)>, // (fan_number, speed, label)
+    pub cpu_fan_speeds: Vec<(u8, u16, String)>, // (fan_number, speed, label)
+    pub intake_fan_speeds: Vec<(u8, u16, String)>, // (fan_number, speed, label)
+    pub gpu_fan_speeds: Vec<(u8, u16, String)>, // (fan_number, speed, label)
     pub fan_duty: u16,
     pub cpu_usage: f32,
 }
@@ -118,7 +120,7 @@ impl FanMonitor {
                 .build();
 
             // Subscribe to the signal
-            let mut stream = MessageStream::for_match_rule(match_rule, &connection, None).await?;
+            let mut stream = MessageStream::for_match_rule(match_rule, connection, None).await?;
             
             info!("Started listening for fan curve change signals");
 
@@ -188,14 +190,16 @@ impl FanMonitor {
     pub fn get_current_fan_data_sync(&self) -> Result<FanDataPoint> {
         // Read real CPU temperature
         let temperature = self.read_cpu_temperature()?;
-        let fan_speeds = self.read_fan_speeds()?;
+        let cpu_fan_speeds = self.read_fan_speeds()?;
+        let intake_fan_speeds = self.read_fan_speeds()?;
+        let gpu_fan_speeds = self.read_fan_speeds()?;
         let fan_duty = self.calculate_fan_duty_from_curve(temperature);
         let cpu_usage = self.read_cpu_usage()?;
 
         Ok(FanDataPoint {
             timestamp: chrono::Local::now(),
             temperature,
-            fan_speeds,
+            cpu_fan_speeds,
             fan_duty,
             cpu_usage,
         })
@@ -205,14 +209,16 @@ impl FanMonitor {
     pub async fn get_current_fan_data(&self) -> Result<FanDataPoint> {
         // Read real CPU temperature
         let temperature = self.read_cpu_temperature()?;
-        let fan_speeds = self.read_fan_speeds()?;
+        let cpu_fan_speeds = self.read_fan_speeds()?;
         let fan_duty = self.calculate_fan_duty_from_curve(temperature);
         let cpu_usage = self.read_cpu_usage()?;
 
         Ok(FanDataPoint {
             timestamp: chrono::Local::now(),
             temperature,
-            fan_speeds,
+            cpu_fan_speeds,
+            intake_fan_speeds: Vec::new(),
+            gpu_fan_speeds: Vec::new(),
             fan_duty,
             cpu_usage,
         })
@@ -239,10 +245,10 @@ impl FanMonitor {
         self.last_log_time = Instant::now();
 
         // Real-time console output with formatting
-        let fan_info = if data.fan_speeds.is_empty() {
+        let fan_info = if data.cpu_fan_speeds.is_empty() {
             "No fans".to_string()
         } else {
-            data.fan_speeds.iter()
+            data.cpu_fan_speeds.iter()
                 .map(|(_num, speed, label)| format!("{}: {} RPM", label, speed))
                 .collect::<Vec<_>>()
                 .join(" | ")
@@ -349,7 +355,7 @@ impl FanMonitor {
             let duty_percent = ((temperature - 30.0).max(0.0) * 2.0) as u16;
             let duty_percent = duty_percent.min(100);
             // Convert percentage to ten-thousandths
-            (duty_percent * 100) as u16
+            duty_percent * 100
         }
     }
 
@@ -408,7 +414,7 @@ impl FanMonitor {
     /// Read CPU usage from /proc/stat
     fn read_cpu_usage(&self) -> Result<f32> {
         let stat_content = fs::read_to_string("/proc/stat")
-            .map_err(|e| crate::errors::FanCurveError::Io(e))?;
+            .map_err(crate::errors::FanCurveError::Io)?;
 
         let first_line = stat_content.lines().next()
             .ok_or_else(|| crate::errors::FanCurveError::Config("Empty /proc/stat".to_string()))?;

@@ -43,7 +43,10 @@ impl FanCurveApp {
         let mut fan_monitor = FanMonitor::new();
         // Initialize the fan monitor to detect CPU temperature sensor
         if let Err(e) = fan_monitor.initialize() {
-            eprintln!("Warning: Failed to initialize CPU temperature detection: {}", e);
+            eprintln!(
+                "Warning: Failed to initialize CPU temperature detection: {}",
+                e
+            );
             eprintln!("Falling back to simulation mode");
         }
 
@@ -102,11 +105,12 @@ impl eframe::App for FanCurveApp {
             if let Ok(data) = self.fan_monitor.get_current_fan_data_sync() {
                 println!(
                     "🔄 GUI: Updated fan data - Temp: {:.1}°C, Fans: {}, Duty: {}%",
-                    data.temperature, 
+                    data.temperature,
                     if data.fan_speeds.is_empty() {
                         "No fans".to_string()
                     } else {
-                        data.fan_speeds.iter()
+                        data.fan_speeds
+                            .iter()
                             .map(|(_num, speed, label)| format!("{}: {} RPM", label, speed))
                             .collect::<Vec<_>>()
                             .join(" | ")
@@ -472,9 +476,14 @@ impl eframe::App for FanCurveApp {
                                     ui.horizontal(|ui| {
                                         ui.label("🌀 Fan Speeds:");
                                         if data.fan_speeds.is_empty() {
-                                            ui.colored_label(egui::Color32::GRAY, "No fans detected");
+                                            ui.colored_label(
+                                                egui::Color32::GRAY,
+                                                "No fans detected",
+                                            );
                                         } else {
-                                            for (i, (_num, speed, label)) in data.fan_speeds.iter().enumerate() {
+                                            for (i, (_num, speed, label)) in
+                                                data.fan_speeds.iter().enumerate()
+                                            {
                                                 if i > 0 {
                                                     ui.label(" | ");
                                                 }

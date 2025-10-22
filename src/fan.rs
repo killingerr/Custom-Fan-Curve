@@ -127,13 +127,13 @@ impl FanCurve {
     pub fn standard() -> Self {
         let mut curve = Self::new("Standard".to_string());
         curve.add_point(0, 0);
-        curve.add_point(30, 2000);  // 20% = 2000/10000
-        curve.add_point(40, 3000);  // 30% = 3000/10000
-        curve.add_point(50, 4000);  // 40% = 4000/10000
-        curve.add_point(60, 5000);  // 50% = 5000/10000
-        curve.add_point(70, 6000);  // 60% = 6000/10000
-        curve.add_point(80, 7000);  // 70% = 7000/10000
-        curve.add_point(90, 8000);  // 80% = 8000/10000
+        curve.add_point(30, 2000); // 20% = 2000/10000
+        curve.add_point(40, 3000); // 30% = 3000/10000
+        curve.add_point(50, 4000); // 40% = 4000/10000
+        curve.add_point(60, 5000); // 50% = 5000/10000
+        curve.add_point(70, 6000); // 60% = 6000/10000
+        curve.add_point(80, 7000); // 70% = 7000/10000
+        curve.add_point(90, 8000); // 80% = 8000/10000
         curve.add_point(100, 10000); // 100% = 10000/10000
         curve
     }
@@ -141,14 +141,14 @@ impl FanCurve {
     pub fn threadripper2() -> Self {
         let mut curve = Self::new("Threadripper 2".to_string());
         curve.add_point(0, 0);
-        curve.add_point(25, 1000);  // 10% = 1000/10000
-        curve.add_point(35, 2000);  // 20% = 2000/10000
-        curve.add_point(45, 3000);  // 30% = 3000/10000
-        curve.add_point(55, 4000);  // 40% = 4000/10000
-        curve.add_point(65, 5000);  // 50% = 5000/10000
-        curve.add_point(75, 6000);  // 60% = 6000/10000
-        curve.add_point(85, 7000);  // 70% = 7000/10000
-        curve.add_point(95, 8000);  // 80% = 8000/10000
+        curve.add_point(25, 1000); // 10% = 1000/10000
+        curve.add_point(35, 2000); // 20% = 2000/10000
+        curve.add_point(45, 3000); // 30% = 3000/10000
+        curve.add_point(55, 4000); // 40% = 4000/10000
+        curve.add_point(65, 5000); // 50% = 5000/10000
+        curve.add_point(75, 6000); // 60% = 6000/10000
+        curve.add_point(85, 7000); // 70% = 7000/10000
+        curve.add_point(95, 8000); // 80% = 8000/10000
         curve.add_point(100, 10000); // 100% = 10000/10000
         curve
     }
@@ -156,14 +156,14 @@ impl FanCurve {
     pub fn hedt() -> Self {
         let mut curve = Self::new("HEDT".to_string());
         curve.add_point(0, 0);
-        curve.add_point(20, 1500);  // 15% = 1500/10000
-        curve.add_point(30, 2500);  // 25% = 2500/10000
-        curve.add_point(40, 3500);  // 35% = 3500/10000
-        curve.add_point(50, 4500);  // 45% = 4500/10000
-        curve.add_point(60, 5500);  // 55% = 5500/10000
-        curve.add_point(70, 6500);  // 65% = 6500/10000
-        curve.add_point(80, 7500);  // 75% = 7500/10000
-        curve.add_point(90, 8500);  // 85% = 8500/10000
+        curve.add_point(20, 1500); // 15% = 1500/10000
+        curve.add_point(30, 2500); // 25% = 2500/10000
+        curve.add_point(40, 3500); // 35% = 3500/10000
+        curve.add_point(50, 4500); // 45% = 4500/10000
+        curve.add_point(60, 5500); // 55% = 5500/10000
+        curve.add_point(70, 6500); // 65% = 6500/10000
+        curve.add_point(80, 7500); // 75% = 7500/10000
+        curve.add_point(90, 8500); // 85% = 8500/10000
         curve.add_point(100, 10000); // 100% = 10000/10000
         curve
     }
@@ -171,15 +171,15 @@ impl FanCurve {
     pub fn xeon() -> Self {
         let mut curve = Self::new("Xeon".to_string());
         curve.add_point(0, 0);
-        curve.add_point(15, 500);   // 5% = 500/10000
-        curve.add_point(25, 1500);  // 15% = 1500/10000
-        curve.add_point(35, 2500);  // 25% = 2500/10000
-        curve.add_point(45, 3500);  // 35% = 3500/10000
-        curve.add_point(55, 4500);  // 45% = 4500/10000
-        curve.add_point(65, 5500);  // 55% = 5500/10000
-        curve.add_point(75, 6500);  // 65% = 6500/10000
-        curve.add_point(85, 7500);  // 75% = 7500/10000
-        curve.add_point(95, 8500);  // 85% = 8500/10000
+        curve.add_point(15, 500); // 5% = 500/10000
+        curve.add_point(25, 1500); // 15% = 1500/10000
+        curve.add_point(35, 2500); // 25% = 2500/10000
+        curve.add_point(45, 3500); // 35% = 3500/10000
+        curve.add_point(55, 4500); // 45% = 4500/10000
+        curve.add_point(65, 5500); // 55% = 5500/10000
+        curve.add_point(75, 6500); // 65% = 6500/10000
+        curve.add_point(85, 7500); // 75% = 7500/10000
+        curve.add_point(95, 8500); // 85% = 8500/10000
         curve.add_point(100, 10000); // 100% = 10000/10000
         curve
     }

@@ -50,9 +50,7 @@ impl FanCurveClient {
             FanCurveCommands::RemovePoint => self.remove_fan_curve_point().await,
             FanCurveCommands::Save => self.save_config().await,
             FanCurveCommands::Load => self.load_config().await,
-            FanCurveCommands::Test { duration } => {
-                self.test_fan_curve(duration).await
-            }
+            FanCurveCommands::Test { duration } => self.test_fan_curve(duration).await,
         }
     }
 
