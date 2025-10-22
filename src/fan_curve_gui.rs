@@ -106,10 +106,10 @@ impl eframe::App for FanCurveApp {
                 println!(
                     "🔄 GUI: Updated fan data - Temp: {:.1}°C, Fans: {}, Duty: {}%",
                     data.temperature,
-                    if data.fan_speeds.is_empty() {
+                    if data.cpu_fan_speeds.is_empty() {
                         "No fans".to_string()
                     } else {
-                        data.fan_speeds
+                        data.cpu_fan_speeds
                             .iter()
                             .map(|(_num, speed, label)| format!("{}: {} RPM", label, speed))
                             .collect::<Vec<_>>()
@@ -475,14 +475,14 @@ impl eframe::App for FanCurveApp {
                                     });
                                     ui.horizontal(|ui| {
                                         ui.label("🌀 Fan Speeds:");
-                                        if data.fan_speeds.is_empty() {
+                                        if data.cpu_fan_speeds.is_empty() {
                                             ui.colored_label(
                                                 egui::Color32::GRAY,
                                                 "No fans detected",
                                             );
                                         } else {
                                             for (i, (_num, speed, label)) in
-                                                data.fan_speeds.iter().enumerate()
+                                                data.cpu_fan_speeds.iter().enumerate()
                                             {
                                                 if i > 0 {
                                                     ui.label(" | ");
