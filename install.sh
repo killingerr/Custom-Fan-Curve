@@ -104,31 +104,33 @@ install_dependencies() {
         # Debian/Ubuntu
         print_status "Detected apt package manager (Debian/Ubuntu)"
         sudo apt-get update
-        sudo apt-get install -y build-essential pkg-config cargo libssl-dev libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libdbus-1-dev libegl1 libgl1 mesa-utils libusb-1.0-0-dev devscripts debhelper git curl
+        sudo apt-get install -y build-essential pkg-config cargo libssl-dev libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libdbus-1-dev libegl1 libgl1 mesa-utils libusb-1.0-0-dev devscripts debhelper git curl libasound2-dev libudev-dev
     elif command -v yum &> /dev/null; then
         # RHEL/CentOS
         print_status "Detected yum package manager (RHEL/CentOS)"
         sudo yum groupinstall -y "Development Tools"
-        sudo yum install -y openssl-devel pkgconfig libX11-devel libxcb-devel git curl
+        sudo yum install -y openssl-devel pkgconfig libX11-devel libxcb-devel git curl alsa-lib-devel systemd-devel
     elif command -v dnf &> /dev/null; then
         # Fedora
         print_status "Detected dnf package manager (Fedora)"
         sudo dnf groupinstall -y "Development Tools"
-        sudo dnf install -y openssl-devel pkgconfig libX11-devel libxcb-devel git curl
+        sudo dnf install -y openssl-devel pkgconfig libX11-devel libxcb-devel git curl alsa-lib-devel systemd-devel
     elif command -v pacman &> /dev/null; then
         # Arch Linux
         print_status "Detected pacman package manager (Arch Linux)"
-        sudo pacman -S --noconfirm base-devel openssl pkgconf libx11 libxcb git curl
+        sudo pacman -S --noconfirm base-devel openssl pkgconf libx11 libxcb git curl alsa-lib systemd
     elif command -v zypper &> /dev/null; then
         # openSUSE
         print_status "Detected zypper package manager (openSUSE)"
-        sudo zypper install -y gcc gcc-c++ make openssl-devel pkg-config libX11-devel libxcb-devel git curl
+        sudo zypper install -y gcc gcc-c++ make openssl-devel pkg-config libX11-devel libxcb-devel git curl alsa-devel systemd-devel
     else
         print_warning "Could not detect package manager. Please install the following manually:"
         echo "  - build-essential (gcc, make, etc.)"
         echo "  - openssl-dev"
         echo "  - libx11-dev"
         echo "  - libxcb-dev"
+        echo "  - libasound2-dev (ALSA)"
+        echo "  - libudev-dev (systemd)"
         echo "  - git"
         echo "  - curl"
         read -p "Press Enter to continue after installing dependencies manually..."
@@ -138,12 +140,26 @@ install_dependencies() {
 }
 
 install_system76_power() {
-    print_step "Installing System76 Power..."
+    print_step "Installing System76 Power Fan Curve Fork..."
     git clone https://github.com/tonysystem76/system76-power.git "$S76_POWER_TEMP_DIR/system76-power"
     cd "$S76_POWER_TEMP_DIR/system76-power"
-    dpkg-buildpackage -us -uc
-    sudo dpkg -i ../system76-power_*.deb
-    print_success "System76 Power installed successfully"
+    
+    # Checkout the fan curve branch
+    git checkout fan-curve-v1.2.9.1
+    
+    # Build the fan curve version
+    cargo build --release
+    
+    # Install the binary
+    sudo cp target/release/system76-power-fan-curve /usr/local/bin/
+    sudo chmod +x /usr/local/bin/system76-power-fan-curve
+    
+    # Create symlink for compatibility
+    if [ ! -L "/usr/local/bin/system76-power" ]; then
+        sudo ln -s /usr/local/bin/system76-power-fan-curve /usr/local/bin/system76-power
+    fi
+    
+    print_success "System76 Power Fan Curve Fork installed successfully"
 }
 
 resolve_dependency_conflicts() {
@@ -257,43 +273,43 @@ setup_configuration() {
       "name": "Standard",
       "points": [
         {"temp": 0, "duty": 0},
-        {"temp": 30, "duty": 20},
-        {"temp": 40, "duty": 30},
-        {"temp": 50, "duty": 40},
-        {"temp": 60, "duty": 50},
-        {"temp": 70, "duty": 60},
-        {"temp": 80, "duty": 70},
-        {"temp": 90, "duty": 80},
-        {"temp": 100, "duty": 100}
+        {"temp": 30, "duty": 2000},
+        {"temp": 40, "duty": 3000},
+        {"temp": 50, "duty": 4000},
+        {"temp": 60, "duty": 5000},
+        {"temp": 70, "duty": 6000},
+        {"temp": 80, "duty": 7000},
+        {"temp": 90, "duty": 8000},
+        {"temp": 100, "duty": 10000}
       ]
     },
     {
       "name": "Quiet",
       "points": [
         {"temp": 0, "duty": 0},
-        {"temp": 35, "duty": 10},
-        {"temp": 45, "duty": 20},
-        {"temp": 55, "duty": 30},
-        {"temp": 65, "duty": 40},
-        {"temp": 75, "duty": 50},
-        {"temp": 85, "duty": 60},
-        {"temp": 95, "duty": 70},
-        {"temp": 100, "duty": 80}
+        {"temp": 35, "duty": 1000},
+        {"temp": 45, "duty": 2000},
+        {"temp": 55, "duty": 3000},
+        {"temp": 65, "duty": 4000},
+        {"temp": 75, "duty": 5000},
+        {"temp": 85, "duty": 6000},
+        {"temp": 95, "duty": 7000},
+        {"temp": 100, "duty": 8000}
       ]
     },
     {
       "name": "Performance",
       "points": [
         {"temp": 0, "duty": 0},
-        {"temp": 25, "duty": 20},
-        {"temp": 35, "duty": 30},
-        {"temp": 45, "duty": 40},
-        {"temp": 55, "duty": 50},
-        {"temp": 65, "duty": 60},
-        {"temp": 75, "duty": 70},
-        {"temp": 85, "duty": 80},
-        {"temp": 95, "duty": 90},
-        {"temp": 100, "duty": 100}
+        {"temp": 25, "duty": 2000},
+        {"temp": 35, "duty": 3000},
+        {"temp": 45, "duty": 4000},
+        {"temp": 55, "duty": 5000},
+        {"temp": 65, "duty": 6000},
+        {"temp": 75, "duty": 7000},
+        {"temp": 85, "duty": 8000},
+        {"temp": 95, "duty": 9000},
+        {"temp": 100, "duty": 10000}
       ]
     }
   ],
@@ -343,7 +359,7 @@ Version=1.0
 Type=Application
 Name=$APP_DISPLAY_NAME
 Comment=Control CPU fan curves on System76 laptops
-Exec=/usr/local/bin/fan-curve --gui
+Exec=/usr/local/bin/fan-curve gui
 Icon=$ICON_PATH
 Terminal=false
 Categories=System;Settings;HardwareSettings;
@@ -430,7 +446,7 @@ show_completion_message() {
     echo -e "${GREEN}========================================${NC}"
     echo ""
     echo -e "${CYAN}Usage:${NC}"
-    echo "  fan-curve --gui              # Launch GUI"
+    echo "  fan-curve gui                # Launch GUI"
     echo "  fan-curve --help             # Show help"
     echo "  fan-curve list               # List available curves"
     echo ""
