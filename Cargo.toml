@@ -5,12 +5,16 @@ authors = ["Tony <tony@example.com>"]
 edition = "2021"
 rust-version = "1.75.0"
 
+[[bin]]
+name = "test_fan_curve"
+path = "test_fan_curve.rs"
+
 [dependencies]
 anyhow = "1.0.82"
 chrono = "0.4"
 clap = { version = "4.5.4", features = ["derive"] }
-eframe = "0.32.3"
-egui = "0.32.3"
+iced = "0.12"
+iced_futures = "0.12"
 fern = "0.6"
 futures-util = "0.3"
 log = "0.4"

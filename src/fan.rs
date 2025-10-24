@@ -2,9 +2,10 @@ use crate::errors::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::fmt;
 use zvariant::Type;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq)]
 pub struct FanPoint {
     pub temp: i16,
     pub duty: u16,
@@ -16,10 +17,16 @@ impl FanPoint {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq)]
 pub struct FanCurve {
     name: String,
     points: Vec<FanPoint>,
+}
+
+impl fmt::Display for FanCurve {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name)
+    }
 }
 
 impl FanCurve {
@@ -65,6 +72,10 @@ impl FanCurve {
 
     pub fn get_point(&self, index: usize) -> Option<&FanPoint> {
         self.points.get(index)
+    }
+
+    pub fn get_point_mut(&mut self, index: usize) -> Option<&mut FanPoint> {
+        self.points.get_mut(index)
     }
 
     /// Calculate fan duty for a given temperature using linear interpolation
@@ -194,6 +205,18 @@ impl FanCurve {
         let json = fs::read_to_string(path)?;
         let curve: FanCurve = serde_json::from_str(&json)?;
         Ok(curve)
+    }
+
+    pub fn to_daemon_points(&self) -> Vec<(i16, u16)> {
+        self.points.iter().map(|p| (p.temp, p.duty)).collect()
+    }
+
+    pub fn from_daemon_points(points: Vec<(i16, u16)>) -> Self {
+        let mut curve = Self::new("Custom".to_string());
+        for (temp, duty) in points {
+            curve.add_point(temp, duty);
+        }
+        curve
     }
 }
 

@@ -8,7 +8,7 @@ pub mod cpu_temp;
 pub mod daemon;
 pub mod errors;
 pub mod fan;
-pub mod fan_curve_gui;
+pub mod iced_gui;
 pub mod fan_detector;
 pub mod fan_monitor;
 pub mod logging;

@@ -67,4 +67,13 @@ pub enum FanCurveCommands {
         /// Duration of test in seconds
         duration: u64,
     },
+    /// Test D-Bus integration with system76-power daemon
+    TestDbus,
+    /// Test full FanMonitor integration with daemon
+    TestMonitor {
+        /// Duration of monitoring test in seconds
+        duration: u64,
+    },
+    /// Test GUI integration with daemon
+    TestGui,
 }

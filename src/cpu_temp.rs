@@ -23,6 +23,7 @@ pub struct CpuTempSensor {
 }
 
 /// CPU temperature detector
+#[derive(Clone)]
 pub struct CpuTempDetector {
     sensor: Option<CpuTempSensor>,
 }

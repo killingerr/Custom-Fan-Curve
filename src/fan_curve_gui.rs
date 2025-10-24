@@ -185,7 +185,7 @@ impl eframe::App for FanCurveApp {
             for (i, point) in self.fan_curves[self.current_curve_index].points().iter().enumerate() {
                 ui.horizontal(|ui| {
                     ui.label(format!("Point {}: ", i + 1));
-                    ui.label(format!("{}°C -> {}%", point.temp, point.duty));
+                    ui.label(format!("{}°C -> {:.1}%", point.temp, point.duty as f32 / 100.0));
 
                     ui.add_space(10.0);
 
@@ -231,9 +231,20 @@ impl eframe::App for FanCurveApp {
 
             // Apply button
             if ui.button("Apply Fan Curve").clicked() {
-                match self.save_config() {
-                    Ok(_) => self.set_status("Fan curve applied and saved!".to_string()),
-                    Err(e) => self.set_status(format!("Failed to save: {}", e)),
+                // First save the config locally
+                if let Err(e) = self.save_config() {
+                    self.set_status(format!("Failed to save: {}", e));
+                    return;
+                }
+                
+                /// Then apply the curve to the daemon using current temperature
+                if let Some(ref data) = self.current_fan_data {
+                    match self.fan_monitor.apply_fan_curve_sync(data.temperature) {
+                        Ok(_) => self.set_status("Fan curve applied to daemon and saved!".to_string()),
+                        Err(e) => self.set_status(format!("Failed to apply to daemon: {}", e)),
+                    }
+                } else {
+                    self.set_status("No temperature data available".to_string());
                 }
             }
 

@@ -14,6 +14,7 @@ pub struct FanSensor {
 }
 
 /// Fan detector for System76 Thelio IO
+#[derive(Clone)]
 pub struct FanDetector {
     fans: Vec<FanSensor>,
     hwmon_path: Option<String>,
