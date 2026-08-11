@@ -283,7 +283,7 @@ impl FanMonitor {
         let duty_percentage = data.fan_duty / 100;
 
         println!(
-            "🌡️  Temperature: {:.1}°C | 🌀 Fans: {} | ⚡ Fan Duty: {}% | 💻 CPU: {:.1}% | ⏰ {}",
+            " Temperature: {:.1}°C | Fans: {} | Fan Duty: {}% | CPU: {:.1}% | {}",
             data.temperature,
             fan_info,
             duty_percentage,
@@ -406,39 +406,39 @@ impl FanMonitor {
         match self.fan_detector.set_duty(Some(pwm_value)) {
             Ok(()) => {
                 info!(
-                    "✅ Applied PWM {} to all fans (duty: {}%)",
+                    "Applied PWM {} to all fans (duty: {}%)",
                     pwm_value,
                     duty / 100
                 );
                 if let Err(e) = self.fan_detector.verify_pwm_values() {
-                    warn!("⚠️  PWM verification failed: {}", e);
+                    warn!("PWM verification failed: {}", e);
                 }
             }
             Err(e) => {
-                error!("❌ Failed to set fan PWM via set_duty: {}", e);
+                error!("Failed to set fan PWM via set_duty: {}", e);
 
                 // Fallback to individual CPU fan control
                 if let Some(cpu_fan) = self.fan_detector.get_cpu_fan() {
                     info!(
-                        "🔄 Fallback: Applying direct PWM control to CPU fan {} -> PWM {}",
+                        "Fallback: Applying direct PWM control to CPU fan {} -> PWM {}",
                         cpu_fan.fan_number, pwm_value
                     );
                     match self.fan_detector.set_fan_pwm(cpu_fan.fan_number, pwm_value) {
                         Ok(()) => {
                             info!(
-                                "✅ Fallback successful: CPU fan {} PWM set to {}",
+                                "Fallback successful: CPU fan {} PWM set to {}",
                                 cpu_fan.fan_number, pwm_value
                             );
                         }
                         Err(fallback_e) => {
                             error!(
-                                "❌ Fallback failed: Could not set CPU fan PWM directly: {}",
+                                "Fallback failed: Could not set CPU fan PWM directly: {}",
                                 fallback_e
                             );
                         }
                     }
                 } else {
-                    error!("❌ No CPU fan found for direct PWM control fallback");
+                    error!("No CPU fan found for direct PWM control fallback");
                 }
             }
         }
@@ -456,16 +456,16 @@ impl FanMonitor {
         let duty = self.calculate_fan_duty_from_curve(temperature);
         let duty_percentage = duty / 100; // Convert ten-thousandths to percentage for display
 
-        info!("🌡️  Temperature: {:.1}°C", temperature);
-        info!("📊 Calculated duty: {} ({}%)", duty, duty_percentage);
+        info!("Temperature: {:.1}°C", temperature);
+        info!("Calculated duty: {} ({}%)", duty, duty_percentage);
 
         // Special logging for 100% duty test
         if duty == 10000 {
-            info!("🔥 TEST MODE: 100% DUTY DETECTED - This should set PWM to 255!");
+            info!("TEST MODE: 100% DUTY DETECTED - This should set PWM to 255!");
         }
 
         info!(
-            "🔄 Applying fan curve: {:.1}°C -> {}% duty ({} ten-thousandths)",
+            "Applying fan curve: {:.1}°C -> {}% duty ({} ten-thousandths)",
             temperature, duty_percentage, duty
         );
 
@@ -543,14 +543,14 @@ impl FanMonitor {
 
     /// Debug method to show current fan status and PWM values
     pub fn debug_fan_status(&self) -> Result<()> {
-        info!("🔍 Current Fan Status Debug:");
+        info!("Current Fan Status Debug:");
 
         // Show detected fans
         let fans = self.fan_detector.get_fans();
-        info!("   📊 Detected fans: {}", fans.len());
+        info!("Detected fans: {}", fans.len());
         for fan in fans {
             info!(
-                "      Fan {}: {} at {}",
+                "Fan {}: {} at {}",
                 fan.fan_number, fan.fan_label, fan.hwmon_path
             );
         }
@@ -560,30 +560,30 @@ impl FanMonitor {
             Ok(temp) => {
                 let duty = self.calculate_fan_duty_from_curve(temp);
                 let pwm = self.duty_to_pwm(duty);
-                info!("   🌡️  Current temperature: {:.1}°C", temp);
-                info!("   📊 Calculated duty: {} ({}%)", duty, duty / 100);
-                info!("   ⚡ Calculated PWM: {}", pwm);
+                info!("Current temperature: {:.1}°C", temp);
+                info!("Calculated duty: {} ({}%)", duty, duty / 100);
+                info!("Calculated PWM: {}", pwm);
             }
-            Err(e) => warn!("   ❌ Failed to read temperature: {}", e),
+            Err(e) => warn!("Failed to read temperature: {}", e),
         }
 
         // Show current fan speeds
         match self.read_fan_speeds() {
             Ok(speeds) => {
                 if speeds.is_empty() {
-                    info!("   🌀 No fan speeds detected");
+                    info!("No fan speeds detected");
                 } else {
                     for (fan_num, speed, label) in speeds {
-                        info!("   🌀 Fan {} ({}): {} RPM", fan_num, label, speed);
+                        info!("Fan {} ({}): {} RPM", fan_num, label, speed);
                     }
                 }
             }
-            Err(e) => warn!("   ❌ Failed to read fan speeds: {}", e),
+            Err(e) => warn!("Failed to read fan speeds: {}", e),
         }
 
         // Verify current PWM values
         if let Err(e) = self.fan_detector.verify_pwm_values() {
-            warn!("   ⚠️  PWM verification failed: {}", e);
+            warn!("PWM verification failed: {}", e);
         }
 
         Ok(())
@@ -599,18 +599,18 @@ impl Default for FanMonitor {
 /// Test a fan curve by applying it and monitoring the results
 pub async fn test_fan_curve(curve_name: &str, duration_seconds: u64) -> Result<()> {
     println!(
-        "🚀 Starting fan curve test: '{}' for {} seconds",
+        "Starting fan curve test: '{}' for {} seconds",
         curve_name, duration_seconds
     );
-    println!("⏱️  Real-time monitoring will begin in 3 seconds...\n");
+    println!("Real-time monitoring will begin in 3 seconds...\n");
 
     // Countdown
     for i in (1..=3).rev() {
-        println!("⏳ Starting in {}...", i);
+        println!("Starting in {}...", i);
         sleep(Duration::from_secs(1)).await;
     }
 
-    println!("🎯 Test started! Press Ctrl+C to stop early.\n");
+    println!("Test started! Press Ctrl+C to stop early.\n");
 
     let mut monitor = FanMonitor::new();
     monitor.initialize()?;
@@ -627,7 +627,7 @@ pub async fn test_fan_curve(curve_name: &str, duration_seconds: u64) -> Result<(
     test_curve.add_point(100, 10000); // 100% at 100°C
     monitor.set_fan_curve(test_curve);
 
-    info!("🧪 Test mode: Using 100% duty curve for all temperatures");
+    info!("Test mode: Using 100% duty curve for all temperatures");
 
     // Initialize System76 Power client
     if let Err(e) = monitor.initialize_system76_power().await {
@@ -664,7 +664,7 @@ pub async fn test_fan_curve(curve_name: &str, duration_seconds: u64) -> Result<(
     // Show countdown during test
     for remaining in (1..=duration_seconds).rev() {
         if remaining % 10 == 0 || remaining <= 10 {
-            println!("⏰ Time remaining: {} seconds", remaining);
+            println!("Time remaining: {} seconds", remaining);
         }
         sleep(Duration::from_secs(1)).await;
     }
@@ -672,7 +672,7 @@ pub async fn test_fan_curve(curve_name: &str, duration_seconds: u64) -> Result<(
     // Stop monitoring
     monitor_handle.abort();
 
-    println!("\n✅ Fan curve test completed!");
+    println!("\n Fan curve test completed!");
 
     Ok(())
 }

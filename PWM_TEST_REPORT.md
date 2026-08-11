@@ -1,13 +1,13 @@
 # PWM Fan Control Test Report
 
 ## Test Summary
-**Date:** September 8, 2025  
-**Duration:** 30 seconds  
-**Test Type:** Comprehensive PWM duty cycle verification  
+**Date:** September 8, 2025 
+**Duration:** 30 seconds 
+**Test Type:** Comprehensive PWM duty cycle verification 
 
 ## Test Results
 
-### ✅ **PWM Control Status: WORKING**
+### **PWM Control Status: WORKING**
 
 The test successfully verified that PWM fan control is working properly with the following findings:
 
@@ -22,10 +22,10 @@ The test successfully verified that PWM fan control is working properly with the
 
 | Fan Type | PWM Control | Speed Response | Notes |
 |----------|-------------|----------------|-------|
-| CPU Fan | ✅ Working | ✅ Responsive | Maintains ~435 RPM baseline |
-| Intake Fan | ✅ Working | ✅ Responsive | Speed varies with duty cycle |
-| GPU Fan | ✅ Working | ✅ Responsive | Speed varies with duty cycle |
-| Aux Fan | ✅ Working | ❌ No rotation | May be disconnected or faulty |
+| CPU Fan | Working | Responsive | Maintains ~435 RPM baseline |
+| Intake Fan | Working | Responsive | Speed varies with duty cycle |
+| GPU Fan | Working | Responsive | Speed varies with duty cycle |
+| Aux Fan | Working | No rotation | May be disconnected or faulty |
 
 ### Duty Cycle Accuracy
 
@@ -43,20 +43,20 @@ The PWM control shows excellent accuracy:
 
 ### Key Findings
 
-1. **✅ PWM Control Works:** All fans respond to PWM duty cycle changes
-2. **✅ Accurate Control:** Duty cycle setting is precise (within 1% accuracy)
-3. **✅ Speed Response:** Fan speeds change appropriately with duty cycles
-4. **⚠️ Hardware Limits:** Some fans have minimum duty cycle thresholds
-5. **❌ Aux Fan Issue:** Aux fan shows no rotation (may be disconnected)
+1. ** PWM Control Works:** All fans respond to PWM duty cycle changes
+2. ** Accurate Control:** Duty cycle setting is precise (within 1% accuracy)
+3. ** Speed Response:** Fan speeds change appropriately with duty cycles
+4. ** Hardware Limits:** Some fans have minimum duty cycle thresholds
+5. ** Aux Fan Issue:** Aux fan shows no rotation (may be disconnected)
 
 ### System76 Power Integration
 
 The original Rust application shows:
-- ✅ Fan detection working
-- ✅ Temperature monitoring working  
-- ✅ Fan curve calculation working
-- ❌ PWM enable file missing (pwm*_enable files don't exist)
-- ⚠️ Falls back to System76 Power profiles instead of direct PWM
+- Fan detection working
+- Temperature monitoring working 
+- Fan curve calculation working
+- PWM enable file missing (pwm*_enable files don't exist)
+- Falls back to System76 Power profiles instead of direct PWM
 
 ### Recommendations
 

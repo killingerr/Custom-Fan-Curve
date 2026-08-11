@@ -4,12 +4,12 @@ A modern GUI application for controlling CPU fan curves on System76 laptops, bui
 
 ## Features
 
-- 🎛️ **Interactive Fan Curve Editor** - Create custom fan curves with an intuitive GUI
-- 🌡️ **Real-time Temperature Monitoring** - Monitor CPU temperatures and fan speeds
-- 📊 **Multiple Curve Profiles** - Save and switch between different fan curve configurations
-- 🔧 **System76 Integration** - Designed specifically for System76 laptops
-- 🧩 **Optional Thelio IO Integration** - Experimental hook to the Thelio IO daemon
-- 🚀 **High Performance** - Built with Rust for optimal performance and reliability
+- **Interactive Fan Curve Editor** - Create custom fan curves with an intuitive GUI
+- **Real-time Temperature Monitoring** - Monitor CPU temperatures and fan speeds
+- **Multiple Curve Profiles** - Save and switch between different fan curve configurations
+- **System76 Integration** - Designed specifically for System76 laptops
+- **Optional Thelio IO Integration** - Experimental hook to the Thelio IO daemon
+- **High Performance** - Built with Rust for optimal performance and reliability
 
 ## Quick Installation
 

@@ -260,7 +260,7 @@ impl eframe::App for FanCurveApp {
             // CPU manufacturer information
             if let Some(sensor_info) = self.fan_monitor.cpu_temp_detector().get_sensor_info() {
                 ui.horizontal(|ui| {
-                    ui.label("🖥️ CPU:");
+                    ui.label("CPU:");
                     ui.colored_label(
                         match sensor_info.manufacturer {
                             crate::cpu_temp::CpuManufacturer::Intel => egui::Color32::BLUE,
@@ -274,7 +274,7 @@ impl eframe::App for FanCurveApp {
                 });
             } else {
                 ui.horizontal(|ui| {
-                    ui.label("🖥️ CPU:");
+                    ui.label("CPU:");
                     ui.colored_label(egui::Color32::GRAY, "Unknown");
                     ui.label("|");
                     ui.colored_label(egui::Color32::YELLOW, "Temperature sensor not detected");
@@ -282,7 +282,7 @@ impl eframe::App for FanCurveApp {
             }
 
             ui.horizontal(|ui| {
-                ui.label("🔌 Daemon:");
+                ui.label("Daemon:");
                 if self.daemon.is_some() {
                     ui.colored_label(egui::Color32::GREEN, "connected (daemon controls fans)");
                 } else {
@@ -295,7 +295,7 @@ impl eframe::App for FanCurveApp {
             if self.daemon.is_none() {
                 ui.colored_label(
                     egui::Color32::YELLOW,
-                    "Start: sudo ./scripts/install-daemon.sh   (or: sudo systemctl start fan-curve-daemon)",
+                    "Start: sudo ./scripts/install-daemon.sh (or: sudo systemctl start fan-curve-daemon)",
                 );
             }
 
@@ -645,7 +645,7 @@ impl eframe::App for FanCurveApp {
                     egui::Layout::top_down(egui::Align::Center),
                     |ui| {
                         ui.horizontal(|ui| {
-                            ui.heading("🌡️ Live Fan Data");
+                            ui.heading("Live Fan Data");
                         });
 
                         ui.separator();
@@ -656,7 +656,7 @@ impl eframe::App for FanCurveApp {
                                 // Temperature and Fan Speed
                                 ui.vertical(|ui| {
                                     ui.horizontal(|ui| {
-                                        ui.label("🌡️ Temperature:");
+                                        ui.label("Temperature:");
                                         ui.colored_label(
                                             if data.temperature > 70.0 {
                                                 egui::Color32::RED
@@ -669,7 +669,7 @@ impl eframe::App for FanCurveApp {
                                         );
                                     });
                                     ui.horizontal(|ui| {
-                                        ui.label("🌀 Fan Speeds:");
+                                        ui.label("Fan Speeds:");
                                         if data.fan_speeds.is_empty() {
                                             ui.colored_label(
                                                 egui::Color32::GRAY,
@@ -702,7 +702,7 @@ impl eframe::App for FanCurveApp {
                                 // Fan Duty and CPU Usage
                                 ui.vertical(|ui| {
                                     ui.horizontal(|ui| {
-                                        ui.label("⚡ Fan Duty:");
+                                        ui.label("Fan Duty:");
                                         ui.colored_label(
                                             if data.fan_duty > 8000 {
                                                 egui::Color32::RED
@@ -715,7 +715,7 @@ impl eframe::App for FanCurveApp {
                                         );
                                     });
                                     ui.horizontal(|ui| {
-                                        ui.label("💻 CPU Usage:");
+                                        ui.label("CPU Usage:");
                                         ui.colored_label(
                                             if data.cpu_usage > 80.0 {
                                                 egui::Color32::RED
@@ -733,7 +733,7 @@ impl eframe::App for FanCurveApp {
 
                                 // Timestamp
                                 ui.vertical(|ui| {
-                                    ui.label("⏰ Last Update:");
+                                    ui.label("Last Update:");
                                     ui.label(data.timestamp.format("%H:%M:%S").to_string());
                                 });
                             });
@@ -742,7 +742,7 @@ impl eframe::App for FanCurveApp {
                         } else {
                             ui.horizontal(|ui| {
                                 ui.spinner();
-                                ui.label("🔄 Collecting fan data...");
+                                ui.label("Collecting fan data...");
                             });
                         }
                     },
