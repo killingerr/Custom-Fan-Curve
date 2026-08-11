@@ -1,37 +1,25 @@
 //! Main entry point for the fan curve application
 
 use clap::Parser;
+use eframe::egui;
 use fan_curve_app::{
-    args::Args, client::FanCurveClient, daemon::FanCurveDaemon, iced_gui, logging,
+    args::Args, client::FanCurveClient, daemon::FanCurveDaemon, fan_curve_gui::FanCurveApp, logging,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Print version and build metadata for binary identity verification
-    let pkg_version = env!("CARGO_PKG_VERSION");
-    let git_hash = option_env!("GIT_HASH").unwrap_or("unknown");
-    let git_desc = option_env!("GIT_DESC").unwrap_or("unknown");
-    let build_time = option_env!("BUILD_TIME").unwrap_or("unknown");
-    eprintln!(
-        "fan-curve-app v{} (git {} / {}) built {}",
-        pkg_version, git_hash, git_desc, build_time
-    );
-    // Parse command line arguments
     let args = Args::parse();
-
-    // Setup logging
     logging::setup(args.verbose).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
-    // Handle GUI mode
+    // GUI uses zbus's blocking API, which cannot run inside a Tokio runtime.
+    // Keep this path fully synchronous.
     if args.gui {
-        run_gui()?;
-        return Ok(());
+        return run_gui().map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
     }
 
-    // For non-GUI modes, we need async, so create a Tokio runtime
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async_main(args))?;
-
-    Ok(())
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(async_main(args))
 }
 
 async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
@@ -59,7 +47,19 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Run the GUI application
-fn run_gui() -> Result<(), Box<dyn std::error::Error>> {
-    iced_gui::run_iced_gui()?;
-    Ok(())
+fn run_gui() -> Result<(), eframe::Error> {
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([400.0, 300.0])
+            .with_resizable(true)
+            .with_decorations(true)
+            .with_title("Fan Curve Control"),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "Fan Curve Control",
+        native_options,
+        Box::new(|cc| Ok(Box::new(FanCurveApp::new(cc)))),
+    )
 }

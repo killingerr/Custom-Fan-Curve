@@ -1,0 +1,14 @@
+[Unit]
+Description=Fan Curve Control Daemon
+Documentation=https://github.com/tonysystem76/Fan-Curve-App
+After=dbus.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/fan-curve-app daemon
+Environment=FAN_CURVE_APP_CONFIG=/etc/fan-curve-app/config.json
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

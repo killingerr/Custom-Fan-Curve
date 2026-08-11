@@ -23,8 +23,9 @@ CONFIG_DIR="$HOME/.fan_curve_app"
 DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons"
 REPO_URL="https://github.com/tonysystem76/Fan-Curve-App.git"
+SYSTEM76_POWER_REPO_URL="https://github.com/tonysystem76/system76-power.git"
 TEMP_DIR="/tmp/fan-curve-app-install"
-S76_POWER_TEMP_DIR="/tmp/system76-power-install"
+SYSTEM76_POWER_TEMP_DIR="/tmp/system76-power-install"
 
 # Functions
 print_header() {
@@ -104,96 +105,37 @@ install_dependencies() {
         # Debian/Ubuntu
         print_status "Detected apt package manager (Debian/Ubuntu)"
         sudo apt-get update
-        sudo apt-get install -y build-essential pkg-config cargo libssl-dev libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libdbus-1-dev libegl1 libgl1 mesa-utils libusb-1.0-0-dev devscripts debhelper git curl libasound2-dev libudev-dev
+        sudo apt-get install -y build-essential pkg-config libssl-dev libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev git curl
     elif command -v yum &> /dev/null; then
         # RHEL/CentOS
         print_status "Detected yum package manager (RHEL/CentOS)"
         sudo yum groupinstall -y "Development Tools"
-        sudo yum install -y openssl-devel pkgconfig libX11-devel libxcb-devel git curl alsa-lib-devel systemd-devel
+        sudo yum install -y openssl-devel pkgconfig libX11-devel libxcb-devel git curl
     elif command -v dnf &> /dev/null; then
         # Fedora
         print_status "Detected dnf package manager (Fedora)"
         sudo dnf groupinstall -y "Development Tools"
-        sudo dnf install -y openssl-devel pkgconfig libX11-devel libxcb-devel git curl alsa-lib-devel systemd-devel
+        sudo dnf install -y openssl-devel pkgconfig libX11-devel libxcb-devel git curl
     elif command -v pacman &> /dev/null; then
         # Arch Linux
         print_status "Detected pacman package manager (Arch Linux)"
-        sudo pacman -S --noconfirm base-devel openssl pkgconf libx11 libxcb git curl alsa-lib systemd
+        sudo pacman -S --noconfirm base-devel openssl pkgconf libx11 libxcb git curl
     elif command -v zypper &> /dev/null; then
         # openSUSE
         print_status "Detected zypper package manager (openSUSE)"
-        sudo zypper install -y gcc gcc-c++ make openssl-devel pkg-config libX11-devel libxcb-devel git curl alsa-devel systemd-devel
+        sudo zypper install -y gcc gcc-c++ make openssl-devel pkg-config libX11-devel libxcb-devel git curl
     else
         print_warning "Could not detect package manager. Please install the following manually:"
         echo "  - build-essential (gcc, make, etc.)"
         echo "  - openssl-dev"
         echo "  - libx11-dev"
         echo "  - libxcb-dev"
-        echo "  - libasound2-dev (ALSA)"
-        echo "  - libudev-dev (systemd)"
         echo "  - git"
         echo "  - curl"
         read -p "Press Enter to continue after installing dependencies manually..."
     fi
     
     print_success "Dependencies installed"
-}
-
-install_system76_power() {
-    print_step "Installing System76 Power Fan Curve Fork..."
-    git clone https://github.com/tonysystem76/system76-power.git "$S76_POWER_TEMP_DIR/system76-power"
-    cd "$S76_POWER_TEMP_DIR/system76-power"
-    
-    # Checkout the fan curve branch
-    git checkout fan-curve-v1.2.9.1
-    
-    # Build the fan curve version
-    cargo build --release
-    
-    # Install the binary
-    sudo cp target/release/system76-power-fan-curve /usr/local/bin/
-    sudo chmod +x /usr/local/bin/system76-power-fan-curve
-    
-    # Create symlink for compatibility
-    if [ ! -L "/usr/local/bin/system76-power" ]; then
-        sudo ln -s /usr/local/bin/system76-power-fan-curve /usr/local/bin/system76-power
-    fi
-    
-    print_success "System76 Power Fan Curve Fork installed successfully"
-}
-
-resolve_dependency_conflicts() {
-    print_step "Resolving dependency conflicts..."
-    
-    # Check for common conflict scenarios
-    CONFLICTS_FOUND=false
-    
-    # Check for conflicting Rust versions
-    if command -v rustc >/dev/null 2>&1; then
-        RUST_VERSION=$(rustc --version | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+')
-        RUST_MAJOR=$(echo "$RUST_VERSION" | cut -d. -f1)
-        RUST_MINOR=$(echo "$RUST_VERSION" | cut -d. -f2)
-        
-        if [ "$RUST_MAJOR" -lt 1 ] || ([ "$RUST_MAJOR" -eq 1 ] && [ "$RUST_MINOR" -lt 70 ]); then
-            print_warning "Found old Rust version ($RUST_VERSION). Installing rustup..."
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            export PATH="$HOME/.cargo/bin:$PATH"
-            CONFLICTS_FOUND=true
-        fi
-    fi
-    
-    # Check for conflicting system libraries
-    if dpkg -l | grep -q "libdbus-1-dev.*1\.[0-9]\."; then
-        DBUS_VERSION=$(dpkg -l | grep "libdbus-1-dev" | awk '{print $3}')
-        print_status "Found system DBus version: $DBUS_VERSION"
-        # DBus is generally backward compatible, so we don't need to change it
-    fi
-    
-    if [ "$CONFLICTS_FOUND" = true ]; then
-        print_success "Dependency conflicts resolved"
-    else
-        print_success "No dependency conflicts found"
-    fi
 }
 
 download_and_build() {
@@ -207,34 +149,9 @@ download_and_build() {
     git clone "$REPO_URL" "$TEMP_DIR"
     cd "$TEMP_DIR"
     
-    # Check for dependency conflicts and resolve them
-    print_status "Checking for dependency conflicts..."
-    if ! cargo check --quiet 2>/dev/null; then
-        print_status "Resolving dependency conflicts..."
-        
-        # Clean any existing build artifacts
-        cargo clean
-        
-        # Try to resolve conflicts by updating Cargo.lock
-        cargo update
-        
-        # If still failing, try with different resolver
-        if ! cargo check --quiet 2>/dev/null; then
-            print_status "Attempting alternative dependency resolution..."
-            
-            # Try static linking to avoid conflicts
-            print_status "Trying static linking build..."
-            RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --locked 2>/dev/null || \
-            cargo build --release --locked --offline 2>/dev/null || \
-            cargo build --release
-        else
-            cargo build --release --locked
-        fi
-    else
-        # Build in release mode with locked dependencies
-        print_status "Building application (this may take a few minutes)..."
-        cargo build --release --locked
-    fi
+    # Build in release mode
+    print_status "Building application (this may take a few minutes)..."
+    cargo build --release
     
     print_success "Application built successfully"
 }
@@ -260,10 +177,12 @@ install_application() {
 setup_configuration() {
     print_step "Setting up configuration directory..."
     
-    # Create config direc tory
+    # Create config directory
     mkdir -p "$CONFIG_DIR"
     
     # Create default config if it doesn't exist
+    # NOTE: duty values are in ten-thousandths of a percent (10000 = 100%),
+    # matching the system76-power convention used internally by the app.
     if [ ! -f "$CONFIG_DIR/config.json" ]; then
         print_status "Creating default configuration..."
         cat > "$CONFIG_DIR/config.json" << 'EOF'
@@ -313,14 +232,37 @@ setup_configuration() {
       ]
     }
   ],
-  "default_curve_index": 0,
-  "auto_start": false,
-  "polling_interval": 1000
+  "default_curve_index": 0
 }
 EOF
         print_success "Default configuration created"
     else
         print_status "Configuration already exists, skipping"
+    fi
+}
+
+install_daemon() {
+    print_step "Installing fan curve daemon (DBus policy + systemd service)..."
+
+    # DBus policy: allows root to own the service name and users to call it
+    sudo cp "data/com.system76.FanCurveDaemon.conf" /usr/share/dbus-1/system.d/
+
+    # Systemd unit
+    sudo cp "data/fan-curve-daemon.service" /etc/systemd/system/
+
+    # System-wide config for the daemon (seeded from the user config)
+    sudo mkdir -p /etc/fan-curve-app
+    if [ ! -f /etc/fan-curve-app/config.json ]; then
+        sudo cp "$CONFIG_DIR/config.json" /etc/fan-curve-app/config.json
+    fi
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now fan-curve-daemon.service
+
+    if systemctl is-active --quiet fan-curve-daemon.service; then
+        print_success "Fan curve daemon is running"
+    else
+        print_warning "Daemon may not be running. Check with: sudo systemctl status fan-curve-daemon"
     fi
 }
 
@@ -359,7 +301,7 @@ Version=1.0
 Type=Application
 Name=$APP_DISPLAY_NAME
 Comment=Control CPU fan curves on System76 laptops
-Exec=/usr/local/bin/fan-curve gui
+Exec=/usr/local/bin/fan-curve --gui
 Icon=$ICON_PATH
 Terminal=false
 Categories=System;Settings;HardwareSettings;
@@ -379,6 +321,55 @@ EOF
     print_success "Desktop entry created"
 }
 
+install_system76_power_fork() {
+    print_step "Installing custom system76-power fork..."
+    
+    # Check if system76-power service is running
+    if systemctl --user is-active --quiet system76-power; then
+        print_status "Stopping current system76-power service..."
+        systemctl --user stop system76-power
+    fi
+    
+    # Disable the service temporarily
+    if systemctl --user is-enabled --quiet system76-power; then
+        print_status "Disabling system76-power service..."
+        systemctl --user disable system76-power
+    fi
+    
+    # Clean up any existing temp directory
+    rm -rf "$SYSTEM76_POWER_TEMP_DIR"
+    
+    # Clone the custom system76-power repository
+    print_status "Cloning custom system76-power repository..."
+    git clone "$SYSTEM76_POWER_REPO_URL" "$SYSTEM76_POWER_TEMP_DIR"
+    cd "$SYSTEM76_POWER_TEMP_DIR"
+    
+    # Build system76-power in release mode
+    print_status "Building custom system76-power (this may take a few minutes)..."
+    cargo build --release
+    
+    # Install the custom system76-power
+    print_status "Installing custom system76-power..."
+    sudo cargo install --path . --force
+    
+    # Start the custom system76-power service
+    print_status "Starting custom system76-power service..."
+    systemctl --user start system76-power
+    
+    # Enable it to start on boot
+    print_status "Enabling system76-power to start on boot..."
+    systemctl --user enable system76-power
+    
+    # Verify it's running
+    if systemctl --user is-active --quiet system76-power; then
+        print_success "Custom system76-power is running successfully"
+    else
+        print_warning "system76-power service may not be running. Check with: systemctl --user status system76-power"
+    fi
+    
+    print_success "Custom system76-power installation completed"
+}
+
 create_uninstall_script() {
     print_step "Creating uninstall script..."
     
@@ -388,6 +379,13 @@ create_uninstall_script() {
 # Fan Curve App Uninstaller
 
 echo "Uninstalling Fan Curve Control App..."
+
+# Stop and remove the daemon
+sudo systemctl disable --now fan-curve-daemon.service 2>/dev/null || true
+sudo rm -f /etc/systemd/system/fan-curve-daemon.service
+sudo rm -f /usr/share/dbus-1/system.d/com.system76.FanCurveDaemon.conf
+sudo rm -rf /etc/fan-curve-app
+sudo systemctl daemon-reload
 
 # Remove binary and symlink
 sudo rm -f /usr/local/bin/fan-curve-app
@@ -417,6 +415,7 @@ EOF
 cleanup() {
     print_step "Cleaning up temporary files..."
     rm -rf "$TEMP_DIR"
+    rm -rf "$SYSTEM76_POWER_TEMP_DIR"
     print_success "Cleanup completed"
 }
 
@@ -430,6 +429,7 @@ show_usage() {
     echo "  --no-gui         Skip desktop entry creation"
     echo "  --no-deps        Skip dependency installation"
     echo "  --no-icon        Skip icon installation"
+    echo "  --no-system76    Skip custom system76-power installation"
     echo "  --local          Install to local directory instead of system"
     echo ""
     echo "Examples:"
@@ -437,6 +437,7 @@ show_usage() {
     echo "  $0 --local            # Install to local directory"
     echo "  $0 --no-gui          # Install without desktop entry"
     echo "  $0 --no-deps         # Skip dependency installation"
+    echo "  $0 --no-system76     # Skip custom system76-power installation"
 }
 
 show_completion_message() {
@@ -446,9 +447,20 @@ show_completion_message() {
     echo -e "${GREEN}========================================${NC}"
     echo ""
     echo -e "${CYAN}Usage:${NC}"
-    echo "  fan-curve gui                # Launch GUI"
-    echo "  fan-curve --help             # Show help"
-    echo "  fan-curve list               # List available curves"
+    echo "  fan-curve --gui                       # Launch GUI"
+    echo "  fan-curve --help                      # Show help"
+    echo "  fan-curve fan-curve list              # List available curves"
+    echo "  fan-curve fan-curve set \"Standard\"    # Apply a curve via the daemon"
+    echo ""
+    echo -e "${CYAN}Daemon:${NC}"
+    echo "  Status:  sudo systemctl status fan-curve-daemon"
+    echo "  Logs:    sudo journalctl -u fan-curve-daemon -f"
+    echo "  Config:  /etc/fan-curve-app/config.json"
+    echo ""
+    echo -e "${CYAN}Curves:${NC}"
+    echo "  On boot the daemon always loads the saved default curve."
+    echo "  'Apply' switches for this session only; reboot returns to default."
+    echo "  'Set as Default' (or: fan-curve fan-curve set-default NAME) persists across reboots."
     echo ""
     echo -e "${CYAN}File locations:${NC}"
     echo "  Binary: $INSTALL_DIR/$APP_NAME"
@@ -457,6 +469,11 @@ show_completion_message() {
     if [ -f "$ICON_DIR/fan-curve-app.svg" ]; then
         echo "  Icon: $ICON_DIR/fan-curve-app.svg"
     fi
+    echo ""
+    echo -e "${CYAN}System76 Power:${NC}"
+    echo "  Custom system76-power has been installed and is running"
+    echo "  Check status: systemctl --user status system76-power"
+    echo "  Restart if needed: systemctl --user restart system76-power"
     echo ""
     echo -e "${CYAN}To uninstall:${NC}"
     echo "  $HOME/uninstall-fan-curve-app.sh"
@@ -469,6 +486,7 @@ main() {
     local skip_gui=false
     local skip_deps=false
     local skip_icon=false
+    local skip_system76=false
     local local_install=false
     
     # Parse command line arguments
@@ -488,6 +506,10 @@ main() {
                 ;;
             --no-icon)
                 skip_icon=true
+                shift
+                ;;
+            --no-system76)
+                skip_system76=true
                 shift
                 ;;
             --local)
@@ -510,13 +532,12 @@ main() {
     
     if [ "$skip_deps" = false ]; then
         install_dependencies
-        install_system76_power
-        resolve_dependency_conflicts
     fi
     
     download_and_build
     install_application
     setup_configuration
+    install_daemon
     
     if [ "$skip_icon" = false ]; then
         install_icon
@@ -524,6 +545,10 @@ main() {
     
     if [ "$skip_gui" = false ]; then
         create_desktop_entry
+    fi
+    
+    if [ "$skip_system76" = false ]; then
+        install_system76_power_fork
     fi
     
     create_uninstall_script

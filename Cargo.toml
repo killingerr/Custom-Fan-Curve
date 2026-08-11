@@ -1,20 +1,16 @@
 [package]
 name = "fan-curve-app"
-version = "0.2.0"
+version = "0.1.0"
 authors = ["Tony <tony@example.com>"]
 edition = "2021"
 rust-version = "1.75.0"
-
-[[bin]]
-name = "test_fan_curve"
-path = "test_fan_curve.rs"
 
 [dependencies]
 anyhow = "1.0.82"
 chrono = "0.4"
 clap = { version = "4.5.4", features = ["derive"] }
-iced = "0.12"
-iced_futures = "0.12"
+eframe = "0.32.2"
+egui = "0.32.2"
 fern = "0.6"
 futures-util = "0.3"
 log = "0.4"
@@ -26,6 +22,7 @@ tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "time", "si
 zbus = { version = "3.15.2", default-features = false, features = ["tokio"] }
 zbus_polkit = { version = "3.0.0", features = ["tokio"] }
 zvariant = "3.15.2"
+env_logger = "0.10"
 
 
 
@@ -35,16 +32,6 @@ winapi = { version = "0.3", features = ["winuser"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = "0.9.0"
 
-[build-dependencies]
-chrono = "0.4"
-
-[profile.release]
-# Enable static linking to avoid dependency conflicts
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-
-# Static linking for better compatibility
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "target-feature=+crt-static"]
+[[bin]]
+name = "debug_pwm"
+path = "debug_pwm.rs"
