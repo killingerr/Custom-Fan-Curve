@@ -1,5 +1,5 @@
-use crate::errors::Result;
 use crate::cpu_temp::CpuTempDetector;
+use crate::errors::Result;
 use crate::fan_detector::FanDetector;
 use crate::system76_power_client::System76PowerClient;
 use chrono::{DateTime, Local};
@@ -52,13 +52,16 @@ impl FanMonitor {
         if let Err(e) = self.cpu_temp_detector.initialize() {
             warn!("Failed to initialize CPU temperature detection: {}", e);
         }
-        
+
         // Initialize fan detection
         if let Err(e) = self.fan_detector.initialize() {
             warn!("Failed to initialize fan detection: {}", e);
         }
-        
-        info!("Fan monitor initialized with {} fans detected", self.fan_detector.fan_count());
+
+        info!(
+            "Fan monitor initialized with {} fans detected",
+            self.fan_detector.fan_count()
+        );
         Ok(())
     }
 
@@ -109,17 +112,22 @@ impl FanMonitor {
     /// Load the current fan curve configuration from file
     pub fn load_fan_curve_config(&mut self) -> Result<()> {
         let config_path = crate::fan::FanCurveConfig::get_config_path();
-        
+
         if config_path.exists() {
             match crate::fan::FanCurveConfig::load_from_file(&config_path) {
                 Ok(config) => {
                     if let Some(default_index) = config.default_curve_index {
                         if default_index < config.curves.len() {
                             self.current_fan_curve = Some(config.curves[default_index].clone());
-                            info!("Loaded fan curve configuration: {} (default)", 
-                                  config.curves[default_index].name());
+                            info!(
+                                "Loaded fan curve configuration: {} (default)",
+                                config.curves[default_index].name()
+                            );
                         } else {
-                            warn!("Default curve index {} out of range, using first curve", default_index);
+                            warn!(
+                                "Default curve index {} out of range, using first curve",
+                                default_index
+                            );
                             self.current_fan_curve = Some(config.curves[0].clone());
                         }
                     } else {
@@ -152,8 +160,8 @@ impl FanMonitor {
                 .build();
 
             // Subscribe to the signal
-            let mut stream = MessageStream::for_match_rule(match_rule, &connection, None).await?;
-            
+            let mut stream = MessageStream::for_match_rule(match_rule, connection, None).await?;
+
             info!("Started listening for fan curve change signals");
 
             // Spawn a task to handle incoming signals
@@ -161,7 +169,7 @@ impl FanMonitor {
                 while let Some(msg) = stream.next().await {
                     if let Ok(_msg) = msg {
                         info!("Received fan curve changed signal, updating curve...");
-                        
+
                         // In a real implementation, we would fetch the current curve from the daemon
                         // For now, we'll just log that we received the signal
                         // TODO: Implement actual curve fetching from daemon
@@ -252,35 +260,36 @@ impl FanMonitor {
         }
 
         let data = self.get_current_fan_data().await?;
-        
+
         // Apply fan curve to hardware
         if let Err(e) = self.apply_fan_curve(data.temperature).await {
             warn!("Failed to apply fan curve: {}", e);
         }
-        
+
         self.last_log_time = Instant::now();
 
         // Real-time console output with formatting
         let fan_info = if data.fan_speeds.is_empty() {
             "No fans".to_string()
         } else {
-            data.fan_speeds.iter()
+            data.fan_speeds
+                .iter()
                 .map(|(_num, speed, label)| format!("{}: {} RPM", label, speed))
                 .collect::<Vec<_>>()
                 .join(" | ")
         };
-        
+
         // Convert duty from ten-thousandths to percentage for display
         let duty_percentage = data.fan_duty / 100;
-        
-        println!("🌡️  Temperature: {:.1}°C | 🌀 Fans: {} | ⚡ Fan Duty: {}% | 💻 CPU: {:.1}% | ⏰ {}",
+
+        println!(
+            "🌡️  Temperature: {:.1}°C | 🌀 Fans: {} | ⚡ Fan Duty: {}% | 💻 CPU: {:.1}% | ⏰ {}",
             data.temperature,
             fan_info,
             duty_percentage,
             data.cpu_usage,
             data.timestamp.format("%H:%M:%S")
         );
-
 
         Ok(())
     }
@@ -320,10 +329,13 @@ impl FanMonitor {
         }
 
         info!("Fan detector initialized, reading from hardware sensors");
-        
+
         // Prioritize CPU fan if available
         if let Ok(Some(cpu_fan_data)) = self.fan_detector.read_cpu_fan_speed() {
-            info!("Found CPU fan: Fan {} at {} RPM", cpu_fan_data.0, cpu_fan_data.1);
+            info!(
+                "Found CPU fan: Fan {} at {} RPM",
+                cpu_fan_data.0, cpu_fan_data.1
+            );
             return Ok(vec![cpu_fan_data]);
         }
 
@@ -358,7 +370,6 @@ impl FanMonitor {
         base_temp + time_factor * 10.0 + cpu_factor + random_factor
     }
 
-
     /// Calculate fan duty based on the current fan curve
     /// Returns duty in ten-thousandths (0-10000) to match system76-power standard
     fn calculate_fan_duty_from_curve(&self, temperature: f32) -> u16 {
@@ -371,7 +382,7 @@ impl FanMonitor {
             let duty_percent = ((temperature - 30.0).max(0.0) * 2.0) as u16;
             let duty_percent = duty_percent.min(100);
             // Convert percentage to ten-thousandths
-            (duty_percent * 100) as u16
+            duty_percent * 100
         }
     }
 
@@ -394,7 +405,11 @@ impl FanMonitor {
 
         match self.fan_detector.set_duty(Some(pwm_value)) {
             Ok(()) => {
-                info!("✅ Applied PWM {} to all fans (duty: {}%)", pwm_value, duty / 100);
+                info!(
+                    "✅ Applied PWM {} to all fans (duty: {}%)",
+                    pwm_value,
+                    duty / 100
+                );
                 if let Err(e) = self.fan_detector.verify_pwm_values() {
                     warn!("⚠️  PWM verification failed: {}", e);
                 }
@@ -404,14 +419,22 @@ impl FanMonitor {
 
                 // Fallback to individual CPU fan control
                 if let Some(cpu_fan) = self.fan_detector.get_cpu_fan() {
-                    info!("🔄 Fallback: Applying direct PWM control to CPU fan {} -> PWM {}", 
-                          cpu_fan.fan_number, pwm_value);
+                    info!(
+                        "🔄 Fallback: Applying direct PWM control to CPU fan {} -> PWM {}",
+                        cpu_fan.fan_number, pwm_value
+                    );
                     match self.fan_detector.set_fan_pwm(cpu_fan.fan_number, pwm_value) {
                         Ok(()) => {
-                            info!("✅ Fallback successful: CPU fan {} PWM set to {}", cpu_fan.fan_number, pwm_value);
+                            info!(
+                                "✅ Fallback successful: CPU fan {} PWM set to {}",
+                                cpu_fan.fan_number, pwm_value
+                            );
                         }
                         Err(fallback_e) => {
-                            error!("❌ Fallback failed: Could not set CPU fan PWM directly: {}", fallback_e);
+                            error!(
+                                "❌ Fallback failed: Could not set CPU fan PWM directly: {}",
+                                fallback_e
+                            );
                         }
                     }
                 } else {
@@ -432,18 +455,20 @@ impl FanMonitor {
 
         let duty = self.calculate_fan_duty_from_curve(temperature);
         let duty_percentage = duty / 100; // Convert ten-thousandths to percentage for display
-        
+
         info!("🌡️  Temperature: {:.1}°C", temperature);
         info!("📊 Calculated duty: {} ({}%)", duty, duty_percentage);
-        
+
         // Special logging for 100% duty test
         if duty == 10000 {
             info!("🔥 TEST MODE: 100% DUTY DETECTED - This should set PWM to 255!");
         }
-        
-        info!("🔄 Applying fan curve: {:.1}°C -> {}% duty ({} ten-thousandths)", 
-              temperature, duty_percentage, duty);
-        
+
+        info!(
+            "🔄 Applying fan curve: {:.1}°C -> {}% duty ({} ten-thousandths)",
+            temperature, duty_percentage, duty
+        );
+
         // Try to use System76 Power client if available (for power profiles)
         if let Some(ref client) = self.system76_power_client {
             if let Err(e) = client.apply_fan_curve(temperature, duty_percentage).await {
@@ -458,36 +483,47 @@ impl FanMonitor {
 
     /// Read CPU usage from /proc/stat
     fn read_cpu_usage(&self) -> Result<f32> {
-        let stat_content = fs::read_to_string("/proc/stat")
-            .map_err(|e| crate::errors::FanCurveError::Io(e))?;
+        let stat_content =
+            fs::read_to_string("/proc/stat").map_err(crate::errors::FanCurveError::Io)?;
 
-        let first_line = stat_content.lines().next()
+        let first_line = stat_content
+            .lines()
+            .next()
             .ok_or_else(|| crate::errors::FanCurveError::Config("Empty /proc/stat".to_string()))?;
 
         let fields: Vec<&str> = first_line.split_whitespace().collect();
         if fields.len() < 8 {
-            return Err(crate::errors::FanCurveError::Config("Invalid /proc/stat format".to_string()));
+            return Err(crate::errors::FanCurveError::Config(
+                "Invalid /proc/stat format".to_string(),
+            ));
         }
 
         // Parse CPU times: user, nice, system, idle, iowait, irq, softirq, steal
-        let user: u64 = fields[1].parse()
-            .map_err(|_| crate::errors::FanCurveError::Config("Failed to parse user time".to_string()))?;
-        let nice: u64 = fields[2].parse()
-            .map_err(|_| crate::errors::FanCurveError::Config("Failed to parse nice time".to_string()))?;
-        let system: u64 = fields[3].parse()
-            .map_err(|_| crate::errors::FanCurveError::Config("Failed to parse system time".to_string()))?;
-        let idle: u64 = fields[4].parse()
-            .map_err(|_| crate::errors::FanCurveError::Config("Failed to parse idle time".to_string()))?;
-        let iowait: u64 = fields[5].parse()
-            .map_err(|_| crate::errors::FanCurveError::Config("Failed to parse iowait time".to_string()))?;
-        let irq: u64 = fields[6].parse()
-            .map_err(|_| crate::errors::FanCurveError::Config("Failed to parse irq time".to_string()))?;
-        let softirq: u64 = fields[7].parse()
-            .map_err(|_| crate::errors::FanCurveError::Config("Failed to parse softirq time".to_string()))?;
-        let steal: u64 = if fields.len() > 8 { 
-            fields[8].parse().unwrap_or(0) 
-        } else { 
-            0 
+        let user: u64 = fields[1].parse().map_err(|_| {
+            crate::errors::FanCurveError::Config("Failed to parse user time".to_string())
+        })?;
+        let nice: u64 = fields[2].parse().map_err(|_| {
+            crate::errors::FanCurveError::Config("Failed to parse nice time".to_string())
+        })?;
+        let system: u64 = fields[3].parse().map_err(|_| {
+            crate::errors::FanCurveError::Config("Failed to parse system time".to_string())
+        })?;
+        let idle: u64 = fields[4].parse().map_err(|_| {
+            crate::errors::FanCurveError::Config("Failed to parse idle time".to_string())
+        })?;
+        let iowait: u64 = fields[5].parse().map_err(|_| {
+            crate::errors::FanCurveError::Config("Failed to parse iowait time".to_string())
+        })?;
+        let irq: u64 = fields[6].parse().map_err(|_| {
+            crate::errors::FanCurveError::Config("Failed to parse irq time".to_string())
+        })?;
+        let softirq: u64 = fields[7].parse().map_err(|_| {
+            crate::errors::FanCurveError::Config("Failed to parse softirq time".to_string())
+        })?;
+        let steal: u64 = if fields.len() > 8 {
+            fields[8].parse().unwrap_or(0)
+        } else {
+            0
         };
 
         let total_idle = idle + iowait;
@@ -508,14 +544,17 @@ impl FanMonitor {
     /// Debug method to show current fan status and PWM values
     pub fn debug_fan_status(&self) -> Result<()> {
         info!("🔍 Current Fan Status Debug:");
-        
+
         // Show detected fans
         let fans = self.fan_detector.get_fans();
         info!("   📊 Detected fans: {}", fans.len());
         for fan in fans {
-            info!("      Fan {}: {} at {}", fan.fan_number, fan.fan_label, fan.hwmon_path);
+            info!(
+                "      Fan {}: {} at {}",
+                fan.fan_number, fan.fan_label, fan.hwmon_path
+            );
         }
-        
+
         // Show current temperature and calculated duty
         match self.read_cpu_temperature() {
             Ok(temp) => {
@@ -527,7 +566,7 @@ impl FanMonitor {
             }
             Err(e) => warn!("   ❌ Failed to read temperature: {}", e),
         }
-        
+
         // Show current fan speeds
         match self.read_fan_speeds() {
             Ok(speeds) => {
@@ -541,12 +580,12 @@ impl FanMonitor {
             }
             Err(e) => warn!("   ❌ Failed to read fan speeds: {}", e),
         }
-        
+
         // Verify current PWM values
         if let Err(e) = self.fan_detector.verify_pwm_values() {
             warn!("   ⚠️  PWM verification failed: {}", e);
         }
-        
+
         Ok(())
     }
 }
@@ -558,10 +597,7 @@ impl Default for FanMonitor {
 }
 
 /// Test a fan curve by applying it and monitoring the results
-pub async fn test_fan_curve(
-    curve_name: &str,
-    duration_seconds: u64,
-) -> Result<()> {
+pub async fn test_fan_curve(curve_name: &str, duration_seconds: u64) -> Result<()> {
     println!(
         "🚀 Starting fan curve test: '{}' for {} seconds",
         curve_name, duration_seconds
@@ -578,36 +614,36 @@ pub async fn test_fan_curve(
 
     let mut monitor = FanMonitor::new();
     monitor.initialize()?;
-    
+
     // Load fan curve configuration from file first (as fallback)
     if let Err(e) = monitor.load_fan_curve_config() {
         warn!("Failed to load fan curve config: {}", e);
     }
-    
+
     // Create a test fan curve that forces 100% duty at all temperatures
     let mut test_curve = crate::fan::FanCurve::new("Test 100%".to_string());
-    test_curve.add_point(0, 10000);   // 100% at 0°C
-    test_curve.add_point(50, 10000);  // 100% at 50°C  
+    test_curve.add_point(0, 10000); // 100% at 0°C
+    test_curve.add_point(50, 10000); // 100% at 50°C
     test_curve.add_point(100, 10000); // 100% at 100°C
     monitor.set_fan_curve(test_curve);
-    
+
     info!("🧪 Test mode: Using 100% duty curve for all temperatures");
-    
+
     // Initialize System76 Power client
     if let Err(e) = monitor.initialize_system76_power().await {
         warn!("Failed to initialize System76 Power client: {}", e);
     }
-    
+
     // Initialize DBus connection for fan curve change notifications
     if let Err(e) = monitor.initialize_dbus().await {
         warn!("Failed to initialize DBus connection: {}", e);
     }
-    
+
     // Start listening for fan curve changes
     if let Err(e) = monitor.start_dbus_listener().await {
         warn!("Failed to start DBus listener: {}", e);
     }
-    
+
     monitor.start_monitoring()?;
 
     // Debug: Show initial fan status

@@ -96,7 +96,7 @@ impl FanCurveDaemon {
     fn save_config_internal(&self) -> Result<()> {
         let config = self.config.lock().unwrap();
         let config_path = FanCurveConfig::get_config_path();
-        
+
         // Ensure the directory exists
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -104,16 +104,16 @@ impl FanCurveDaemon {
                 FanCurveError::Io(e)
             })?;
         }
-        
+
         // Create a temporary file first, then rename for atomic operation
         let temp_path = config_path.with_extension("tmp");
-        
+
         // Save to temporary file
         config.save_to_file(&temp_path).map_err(|e| {
             error!("Failed to save config to temp file: {}", e);
             FanCurveError::Config(format!("Failed to save config: {}", e))
         })?;
-        
+
         // Atomically rename temp file to final location
         std::fs::rename(&temp_path, &config_path).map_err(|e| {
             error!("Failed to rename temp config file: {}", e);
@@ -121,8 +121,11 @@ impl FanCurveDaemon {
             let _ = std::fs::remove_file(&temp_path);
             FanCurveError::Io(e)
         })?;
-        
-        info!("Configuration saved successfully to: {}", config_path.display());
+
+        info!(
+            "Configuration saved successfully to: {}",
+            config_path.display()
+        );
         Ok(())
     }
 
@@ -142,7 +145,10 @@ impl FanCurveDaemon {
                 Err(e) => {
                     retries -= 1;
                     if retries > 0 {
-                        error!("Failed to save config, retrying... ({} attempts left): {}", retries, e);
+                        error!(
+                            "Failed to save config, retrying... ({} attempts left): {}",
+                            retries, e
+                        );
                         std::thread::sleep(std::time::Duration::from_millis(100));
                     } else {
                         error!("Failed to save config after all retries: {}", e);
@@ -333,7 +339,8 @@ impl FanCurveDaemon {
         if config.curves.is_empty() {
             return Err(zbus_error_from_display("No fan curves configured"));
         }
-        let current_index = (*self.current_curve_index.lock().unwrap()).min(config.curves.len() - 1);
+        let current_index =
+            (*self.current_curve_index.lock().unwrap()).min(config.curves.len() - 1);
         Ok(config.curves[current_index].clone())
     }
 
@@ -355,13 +362,13 @@ impl FanCurveDaemon {
             *current_index = index as usize;
             config.curves[*current_index].name().to_string()
         };
-        
+
         info!("Fan curve set to: {}", curve_name);
-        
+
         if let Err(e) = Self::fan_curve_changed(&ctxt).await {
             warn!("Failed to emit FanCurveChanged signal: {}", e);
         }
-        
+
         Ok(())
     }
 
@@ -383,11 +390,11 @@ impl FanCurveDaemon {
                 *current_index = index;
             }
             info!("Fan curve set to: {}", name);
-            
+
             if let Err(e) = Self::fan_curve_changed(&ctxt).await {
                 warn!("Failed to emit FanCurveChanged signal: {}", e);
             }
-            
+
             Ok(())
         } else {
             Err(zbus_error_from_display(format!(
@@ -494,11 +501,11 @@ impl FanCurveDaemon {
             }
 
             info!("Added fan curve point: {}°C -> {}%", temp, duty);
-            
+
             if let Err(e) = Self::fan_curve_changed(&ctxt).await {
                 warn!("Failed to emit FanCurveChanged signal: {}", e);
             }
-            
+
             Ok(())
         } else {
             Err(zbus_error_from_display("Invalid current fan curve index"))
@@ -534,11 +541,11 @@ impl FanCurveDaemon {
             }
 
             info!("Removed last fan curve point");
-            
+
             if let Err(e) = Self::fan_curve_changed(&ctxt).await {
                 warn!("Failed to emit FanCurveChanged signal: {}", e);
             }
-            
+
             Ok(())
         } else {
             Err(zbus_error_from_display("No points to remove"))
@@ -626,12 +633,7 @@ impl FanCurveDaemon {
     /// Live status from the control loop: (temperature_c, duty_0_10000, pwm_0_255, fan_speeds)
     async fn get_status(&self) -> zbus::fdo::Result<(f64, u16, u8, Vec<(u8, u16, String)>)> {
         let st = self.status.lock().unwrap();
-        Ok((
-            st.temperature,
-            st.duty,
-            st.pwm,
-            st.fan_speeds.clone(),
-        ))
+        Ok((st.temperature, st.duty, st.pwm, st.fan_speeds.clone()))
     }
 
     /// Reload configuration from disk, replacing the in-memory state

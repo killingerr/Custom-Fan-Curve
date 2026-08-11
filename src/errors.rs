@@ -40,5 +40,3 @@ pub enum FanCurveError {
 pub fn zbus_error_from_display(err: impl std::fmt::Display) -> zbus::fdo::Error {
     zbus::fdo::Error::Failed(format!("{}", err))
 }
-
-

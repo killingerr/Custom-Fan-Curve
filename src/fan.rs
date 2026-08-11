@@ -133,13 +133,13 @@ impl FanCurve {
     pub fn standard() -> Self {
         let mut curve = Self::new("Standard".to_string());
         curve.add_point(0, 0);
-        curve.add_point(30, 2000);  // 20% = 2000/10000
-        curve.add_point(40, 3000);  // 30% = 3000/10000
-        curve.add_point(50, 4000);  // 40% = 4000/10000
-        curve.add_point(60, 5000);  // 50% = 5000/10000
-        curve.add_point(70, 6000);  // 60% = 6000/10000
-        curve.add_point(80, 7000);  // 70% = 7000/10000
-        curve.add_point(90, 8000);  // 80% = 8000/10000
+        curve.add_point(30, 2000); // 20% = 2000/10000
+        curve.add_point(40, 3000); // 30% = 3000/10000
+        curve.add_point(50, 4000); // 40% = 4000/10000
+        curve.add_point(60, 5000); // 50% = 5000/10000
+        curve.add_point(70, 6000); // 60% = 6000/10000
+        curve.add_point(80, 7000); // 70% = 7000/10000
+        curve.add_point(90, 8000); // 80% = 8000/10000
         curve.add_point(100, 10000); // 100% = 10000/10000
         curve
     }
@@ -147,14 +147,14 @@ impl FanCurve {
     pub fn threadripper2() -> Self {
         let mut curve = Self::new("Threadripper 2".to_string());
         curve.add_point(0, 0);
-        curve.add_point(25, 1000);  // 10% = 1000/10000
-        curve.add_point(35, 2000);  // 20% = 2000/10000
-        curve.add_point(45, 3000);  // 30% = 3000/10000
-        curve.add_point(55, 4000);  // 40% = 4000/10000
-        curve.add_point(65, 5000);  // 50% = 5000/10000
-        curve.add_point(75, 6000);  // 60% = 6000/10000
-        curve.add_point(85, 7000);  // 70% = 7000/10000
-        curve.add_point(95, 8000);  // 80% = 8000/10000
+        curve.add_point(25, 1000); // 10% = 1000/10000
+        curve.add_point(35, 2000); // 20% = 2000/10000
+        curve.add_point(45, 3000); // 30% = 3000/10000
+        curve.add_point(55, 4000); // 40% = 4000/10000
+        curve.add_point(65, 5000); // 50% = 5000/10000
+        curve.add_point(75, 6000); // 60% = 6000/10000
+        curve.add_point(85, 7000); // 70% = 7000/10000
+        curve.add_point(95, 8000); // 80% = 8000/10000
         curve.add_point(100, 10000); // 100% = 10000/10000
         curve
     }
@@ -162,14 +162,14 @@ impl FanCurve {
     pub fn hedt() -> Self {
         let mut curve = Self::new("HEDT".to_string());
         curve.add_point(0, 0);
-        curve.add_point(20, 1500);  // 15% = 1500/10000
-        curve.add_point(30, 2500);  // 25% = 2500/10000
-        curve.add_point(40, 3500);  // 35% = 3500/10000
-        curve.add_point(50, 4500);  // 45% = 4500/10000
-        curve.add_point(60, 5500);  // 55% = 5500/10000
-        curve.add_point(70, 6500);  // 65% = 6500/10000
-        curve.add_point(80, 7500);  // 75% = 7500/10000
-        curve.add_point(90, 8500);  // 85% = 8500/10000
+        curve.add_point(20, 1500); // 15% = 1500/10000
+        curve.add_point(30, 2500); // 25% = 2500/10000
+        curve.add_point(40, 3500); // 35% = 3500/10000
+        curve.add_point(50, 4500); // 45% = 4500/10000
+        curve.add_point(60, 5500); // 55% = 5500/10000
+        curve.add_point(70, 6500); // 65% = 6500/10000
+        curve.add_point(80, 7500); // 75% = 7500/10000
+        curve.add_point(90, 8500); // 85% = 8500/10000
         curve.add_point(100, 10000); // 100% = 10000/10000
         curve
     }
@@ -177,15 +177,15 @@ impl FanCurve {
     pub fn xeon() -> Self {
         let mut curve = Self::new("Xeon".to_string());
         curve.add_point(0, 0);
-        curve.add_point(15, 500);   // 5% = 500/10000
-        curve.add_point(25, 1500);  // 15% = 1500/10000
-        curve.add_point(35, 2500);  // 25% = 2500/10000
-        curve.add_point(45, 3500);  // 35% = 3500/10000
-        curve.add_point(55, 4500);  // 45% = 4500/10000
-        curve.add_point(65, 5500);  // 55% = 5500/10000
-        curve.add_point(75, 6500);  // 65% = 6500/10000
-        curve.add_point(85, 7500);  // 75% = 7500/10000
-        curve.add_point(95, 8500);  // 85% = 8500/10000
+        curve.add_point(15, 500); // 5% = 500/10000
+        curve.add_point(25, 1500); // 15% = 1500/10000
+        curve.add_point(35, 2500); // 25% = 2500/10000
+        curve.add_point(45, 3500); // 35% = 3500/10000
+        curve.add_point(55, 4500); // 45% = 4500/10000
+        curve.add_point(65, 5500); // 55% = 5500/10000
+        curve.add_point(75, 6500); // 65% = 6500/10000
+        curve.add_point(85, 7500); // 75% = 7500/10000
+        curve.add_point(95, 8500); // 85% = 8500/10000
         curve.add_point(100, 10000); // 100% = 10000/10000
         curve
     }
@@ -249,48 +249,61 @@ impl FanCurveConfig {
     /// Validate that the configuration is properly saved and can be loaded
     pub fn validate_persistence(&self) -> Result<()> {
         let config_path = Self::get_config_path();
-        
+
         // Save the current config
         self.save_to_file(&config_path)?;
-        
+
         // Try to load it back
         let loaded_config = Self::load_from_file(&config_path)?;
-        
+
         // Validate that the loaded config matches the current config
         if loaded_config.curves.len() != self.curves.len() {
             return Err(crate::errors::FanCurveError::Config(
-                "Curve count mismatch after save/load".to_string()
+                "Curve count mismatch after save/load".to_string(),
             ));
         }
-        
-        for (i, (original, loaded)) in self.curves.iter().zip(loaded_config.curves.iter()).enumerate() {
+
+        for (i, (original, loaded)) in self
+            .curves
+            .iter()
+            .zip(loaded_config.curves.iter())
+            .enumerate()
+        {
             if original.name() != loaded.name() {
-                return Err(crate::errors::FanCurveError::Config(
-                    format!("Curve {} name mismatch after save/load", i)
-                ));
+                return Err(crate::errors::FanCurveError::Config(format!(
+                    "Curve {} name mismatch after save/load",
+                    i
+                )));
             }
-            
+
             if original.points().len() != loaded.points().len() {
-                return Err(crate::errors::FanCurveError::Config(
-                    format!("Curve {} point count mismatch after save/load", i)
-                ));
+                return Err(crate::errors::FanCurveError::Config(format!(
+                    "Curve {} point count mismatch after save/load",
+                    i
+                )));
             }
-            
-            for (j, (orig_point, load_point)) in original.points().iter().zip(loaded.points().iter()).enumerate() {
+
+            for (j, (orig_point, load_point)) in original
+                .points()
+                .iter()
+                .zip(loaded.points().iter())
+                .enumerate()
+            {
                 if orig_point.temp != load_point.temp || orig_point.duty != load_point.duty {
-                    return Err(crate::errors::FanCurveError::Config(
-                        format!("Curve {} point {} data mismatch after save/load", i, j)
-                    ));
+                    return Err(crate::errors::FanCurveError::Config(format!(
+                        "Curve {} point {} data mismatch after save/load",
+                        i, j
+                    )));
                 }
             }
         }
-        
+
         if self.default_curve_index != loaded_config.default_curve_index {
             return Err(crate::errors::FanCurveError::Config(
-                "Default curve index mismatch after save/load".to_string()
+                "Default curve index mismatch after save/load".to_string(),
             ));
         }
-        
+
         Ok(())
     }
 }
@@ -334,36 +347,44 @@ mod tests {
     fn test_persistence_functionality() {
         // Create a test configuration
         let mut config = FanCurveConfig::new();
-        
+
         // Add a custom fan curve
         let mut custom_curve = FanCurve::new("Custom Test".to_string());
         custom_curve.add_point(0, 0);
-        custom_curve.add_point(30, 2000);  // 20% at 30°C
-        custom_curve.add_point(50, 5000);  // 50% at 50°C
-        custom_curve.add_point(70, 8000);  // 80% at 70°C
+        custom_curve.add_point(30, 2000); // 20% at 30°C
+        custom_curve.add_point(50, 5000); // 50% at 50°C
+        custom_curve.add_point(70, 8000); // 80% at 70°C
         custom_curve.add_point(90, 10000); // 100% at 90°C
-        
+
         config.curves.push(custom_curve);
         config.default_curve_index = Some(config.curves.len() - 1); // Set custom as default
-        
+
         // Test save and load
         let config_path = FanCurveConfig::get_config_path();
-        config.save_to_file(&config_path).expect("Failed to save config");
-        
-        let loaded_config = FanCurveConfig::load_from_file(&config_path).expect("Failed to load config");
-        
+        config
+            .save_to_file(&config_path)
+            .expect("Failed to save config");
+
+        let loaded_config =
+            FanCurveConfig::load_from_file(&config_path).expect("Failed to load config");
+
         // Verify the loaded config matches the original
         assert_eq!(loaded_config.curves.len(), config.curves.len());
-        assert_eq!(loaded_config.default_curve_index, config.default_curve_index);
-        
+        assert_eq!(
+            loaded_config.default_curve_index,
+            config.default_curve_index
+        );
+
         // Verify the custom curve was loaded correctly
         let loaded_custom = loaded_config.curves.last().unwrap();
         assert_eq!(loaded_custom.name(), "Custom Test");
         assert_eq!(loaded_custom.points().len(), 5);
-        
+
         // Test persistence validation
-        config.validate_persistence().expect("Persistence validation failed");
-        
+        config
+            .validate_persistence()
+            .expect("Persistence validation failed");
+
         // Clean up test file
         let _ = std::fs::remove_file(&config_path);
     }
@@ -375,35 +396,38 @@ mod tests {
         curve.add_point(0, 0);
         curve.add_point(50, 10000); // 100% = 10000/10000 at 50°C
         curve.add_point(100, 10000);
-        
+
         // Test at exactly 50°C
         let temp_50c = 50.0;
         let temp_thousandths = (temp_50c * 1000.0) as u32; // 50000 thousandths
         let duty = curve.calculate_duty_for_temperature(temp_thousandths);
-        
-        println!("Temperature: {}°C ({} thousandths)", temp_50c, temp_thousandths);
+
+        println!(
+            "Temperature: {}°C ({} thousandths)",
+            temp_50c, temp_thousandths
+        );
         println!("Calculated duty: {} (should be 10000 for 100%)", duty);
         println!("Duty percentage: {}%", duty / 100);
-        
+
         // Test PWM conversion
         let pwm = ((u32::from(duty) * 255) / 10000) as u8;
         println!("PWM value: {} (should be 255 for 100%)", pwm);
-        
+
         // Verify the calculations
         assert_eq!(duty, 10000, "Duty should be 10000 for 100% at 50°C");
         assert_eq!(pwm, 255, "PWM should be 255 for 100% duty");
-        
+
         // Test at 51°C (should still be 100% due to interpolation)
         let temp_51c = 51.0;
         let temp_thousandths_51 = (temp_51c * 1000.0) as u32;
         let duty_51 = curve.calculate_duty_for_temperature(temp_thousandths_51);
         let pwm_51 = ((u32::from(duty_51) * 255) / 10000) as u8;
-        
+
         println!("Temperature: {}°C", temp_51c);
         println!("Calculated duty: {} (should be 10000 for 100%)", duty_51);
         println!("Duty percentage: {}%", duty_51 / 100);
         println!("PWM value: {} (should be 255 for 100%)", pwm_51);
-        
+
         // At 51°C, it should interpolate between 50°C (100%) and 100°C (100%)
         // So it should still be 100%
         assert_eq!(duty_51, 10000, "Duty should be 10000 for 100% at 51°C");

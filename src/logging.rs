@@ -28,5 +28,3 @@ pub fn setup(verbosity: u8) -> Result<(), fern::InitError> {
 
     Ok(())
 }
-
-

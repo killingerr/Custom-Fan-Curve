@@ -1,6 +1,5 @@
 use fan_curve_app::fan_detector::FanDetector;
 use fan_curve_app::fan_monitor::FanMonitor;
-use log::info;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,10 +15,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(()) => {
             println!("✅ Fan detector initialized successfully");
             println!("   Found {} fans", fan_detector.fan_count());
-            
+
             // List all detected fans
             for fan in fan_detector.get_fans() {
-                println!("   📍 Fan {}: {} at {}", fan.fan_number, fan.fan_label, fan.hwmon_path);
+                println!(
+                    "   📍 Fan {}: {} at {}",
+                    fan.fan_number, fan.fan_label, fan.hwmon_path
+                );
             }
         }
         Err(e) => {
@@ -56,15 +58,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a 100% duty curve
     let mut test_curve = fan_curve_app::fan::FanCurve::new("Debug 100%".to_string());
-    test_curve.add_point(0, 10000);   // 100% at 0°C
-    test_curve.add_point(50, 10000);  // 100% at 50°C  
+    test_curve.add_point(0, 10000); // 100% at 0°C
+    test_curve.add_point(50, 10000); // 100% at 50°C
     test_curve.add_point(100, 10000); // 100% at 100°C
     monitor.set_fan_curve(test_curve);
 
     // Test at 50°C (should trigger 100% duty)
     let test_temp = 50.0;
     println!("🌡️  Testing at {}°C (should trigger 100% duty)", test_temp);
-    
+
     if let Err(e) = monitor.apply_fan_curve(test_temp).await {
         println!("❌ Failed to apply fan curve: {}", e);
     }

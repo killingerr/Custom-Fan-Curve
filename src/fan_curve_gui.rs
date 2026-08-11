@@ -76,7 +76,9 @@ fn load_initial_curves(
         FanCurveConfig::new()
     };
     let default = config.default_curve_index.or(Some(0));
-    let current = default.unwrap_or(0).min(config.curves.len().saturating_sub(1));
+    let current = default
+        .unwrap_or(0)
+        .min(config.curves.len().saturating_sub(1));
     (config.curves, default, current)
 }
 
@@ -90,7 +92,10 @@ impl FanCurveApp {
 
         let mut fan_monitor = FanMonitor::new();
         if let Err(e) = fan_monitor.initialize() {
-            eprintln!("Warning: Failed to initialize CPU temperature detection: {}", e);
+            eprintln!(
+                "Warning: Failed to initialize CPU temperature detection: {}",
+                e
+            );
             eprintln!("Falling back to simulation mode");
         }
 
@@ -124,7 +129,7 @@ impl FanCurveApp {
 
     fn save_config(&self) -> Result<()> {
         let config_path = FanCurveConfig::get_config_path();
-        
+
         // Ensure the directory exists
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -140,13 +145,13 @@ impl FanCurveApp {
 
         // Create a temporary file first, then rename for atomic operation
         let temp_path = config_path.with_extension("tmp");
-        
+
         // Save to temporary file
         config.save_to_file(&temp_path).map_err(|e| {
             eprintln!("Failed to save config to temp file: {}", e);
             e
         })?;
-        
+
         // Atomically rename temp file to final location
         std::fs::rename(&temp_path, &config_path).map_err(|e| {
             eprintln!("Failed to rename temp config file: {}", e);
@@ -154,8 +159,11 @@ impl FanCurveApp {
             let _ = std::fs::remove_file(&temp_path);
             e
         })?;
-        
-        println!("Configuration saved successfully to: {}", config_path.display());
+
+        println!(
+            "Configuration saved successfully to: {}",
+            config_path.display()
+        );
         Ok(())
     }
 
@@ -179,10 +187,7 @@ impl FanCurveApp {
         let current_name = self.fan_curves[self.current_curve_index].name().to_string();
 
         proxy
-            .call::<_, _, ()>(
-                "SetConfig",
-                &(curves, default_index, current_name.as_str()),
-            )
+            .call::<_, _, ()>("SetConfig", &(curves, default_index, current_name.as_str()))
             .map_err(|e| e.to_string())?;
 
         Ok(true)
@@ -666,9 +671,14 @@ impl eframe::App for FanCurveApp {
                                     ui.horizontal(|ui| {
                                         ui.label("🌀 Fan Speeds:");
                                         if data.fan_speeds.is_empty() {
-                                            ui.colored_label(egui::Color32::GRAY, "No fans detected");
+                                            ui.colored_label(
+                                                egui::Color32::GRAY,
+                                                "No fans detected",
+                                            );
                                         } else {
-                                            for (i, (_num, speed, label)) in data.fan_speeds.iter().enumerate() {
+                                            for (i, (_num, speed, label)) in
+                                                data.fan_speeds.iter().enumerate()
+                                            {
                                                 if i > 0 {
                                                     ui.label(" | ");
                                                 }

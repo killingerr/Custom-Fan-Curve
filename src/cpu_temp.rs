@@ -1,8 +1,8 @@
-use std::fs;
-use std::path::Path;
 use crate::errors::FanCurveError;
 use crate::errors::Result;
 use log::{info, warn};
+use std::fs;
+use std::path::Path;
 
 /// CPU manufacturer types
 #[derive(Debug, Clone, PartialEq)]
@@ -36,7 +36,7 @@ impl CpuTempDetector {
     /// Initialize the detector by scanning for CPU temperature sensors
     pub fn initialize(&mut self) -> Result<()> {
         info!("Initializing CPU temperature detector...");
-        
+
         // First detect CPU manufacturer
         let manufacturer = self.detect_cpu_manufacturer()?;
         info!("Detected CPU manufacturer: {:?}", manufacturer);
@@ -44,7 +44,7 @@ impl CpuTempDetector {
         // Find the appropriate temperature sensor
         let sensor = self.find_cpu_temp_sensor(&manufacturer)?;
         self.sensor = Some(sensor);
-        
+
         info!("CPU temperature sensor initialized: {:?}", self.sensor);
         Ok(())
     }
@@ -55,10 +55,12 @@ impl CpuTempDetector {
 
         for line in cpuinfo.lines() {
             if line.starts_with("vendor_id") {
-                let vendor = line.split(':').nth(1)
+                let vendor = line
+                    .split(':')
+                    .nth(1)
                     .ok_or_else(|| FanCurveError::Config("Invalid cpuinfo format".to_string()))?
                     .trim();
-                
+
                 return match vendor {
                     "GenuineIntel" => Ok(CpuManufacturer::Intel),
                     "AuthenticAMD" => Ok(CpuManufacturer::Amd),
@@ -70,15 +72,19 @@ impl CpuTempDetector {
             }
         }
 
-        Err(FanCurveError::Config("Could not determine CPU manufacturer".to_string()))
+        Err(FanCurveError::Config(
+            "Could not determine CPU manufacturer".to_string(),
+        ))
     }
 
     /// Find the CPU temperature sensor in /sys/class/hwmon
     fn find_cpu_temp_sensor(&self, manufacturer: &CpuManufacturer) -> Result<CpuTempSensor> {
         let hwmon_dir = Path::new("/sys/class/hwmon");
-        
+
         if !hwmon_dir.exists() {
-            return Err(FanCurveError::Config("Hardware monitoring directory not found".to_string()));
+            return Err(FanCurveError::Config(
+                "Hardware monitoring directory not found".to_string(),
+            ));
         }
 
         // Read all hwmon directories
@@ -87,7 +93,7 @@ impl CpuTempDetector {
         for entry in entries {
             let entry = entry?;
             let hwmon_path = entry.path();
-            
+
             if !hwmon_path.is_dir() {
                 continue;
             }
@@ -96,7 +102,7 @@ impl CpuTempDetector {
             let name_path = hwmon_path.join("name");
             if let Ok(name_content) = fs::read_to_string(&name_path) {
                 let sensor_name = name_content.trim().to_string();
-                
+
                 // Check if this is the sensor we want based on manufacturer
                 let is_target_sensor = match manufacturer {
                     CpuManufacturer::Intel => sensor_name == "coretemp",
@@ -109,9 +115,12 @@ impl CpuTempDetector {
 
                 if is_target_sensor {
                     // Find the correct temperature input file
-                    if let Ok(temp_input_path) = self.find_temp_input_file(&hwmon_path, manufacturer) {
-                        let temp_label_path = self.find_temp_label_file(&hwmon_path, &temp_input_path)?;
-                        
+                    if let Ok(temp_input_path) =
+                        self.find_temp_input_file(&hwmon_path, manufacturer)
+                    {
+                        let temp_label_path =
+                            self.find_temp_label_file(&hwmon_path, &temp_input_path)?;
+
                         return Ok(CpuTempSensor {
                             manufacturer: manufacturer.clone(),
                             hwmon_path: hwmon_path.to_string_lossy().to_string(),
@@ -131,26 +140,36 @@ impl CpuTempDetector {
     }
 
     /// Find the correct temperature input file
-    fn find_temp_input_file(&self, hwmon_path: &Path, manufacturer: &CpuManufacturer) -> Result<String> {
+    fn find_temp_input_file(
+        &self,
+        hwmon_path: &Path,
+        manufacturer: &CpuManufacturer,
+    ) -> Result<String> {
         let entries = fs::read_dir(hwmon_path)?;
 
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
-            
+
             if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
                 if file_name.starts_with("temp") && file_name.ends_with("_input") {
                     // Check if this is the right temperature sensor by reading the label
-                    if let Ok(label_path) = self.find_temp_label_file(hwmon_path, &path.to_string_lossy()) {
+                    if let Ok(label_path) =
+                        self.find_temp_label_file(hwmon_path, &path.to_string_lossy())
+                    {
                         if let Ok(label_content) = fs::read_to_string(&label_path) {
                             let label = label_content.trim();
-                            
+
                             let is_correct_sensor = match manufacturer {
-                                CpuManufacturer::Intel => label.contains("Package id 0") || label.contains("Core 0"),
+                                CpuManufacturer::Intel => {
+                                    label.contains("Package id 0") || label.contains("Core 0")
+                                }
                                 CpuManufacturer::Amd => label.contains("Tctl"),
                                 CpuManufacturer::Unknown => {
                                     // Try both patterns
-                                    label.contains("Package id 0") || label.contains("Core 0") || label.contains("Tctl")
+                                    label.contains("Package id 0")
+                                        || label.contains("Core 0")
+                                        || label.contains("Tctl")
                                 }
                             };
 
@@ -180,33 +199,41 @@ impl CpuTempDetector {
         if let Some(temp_num) = temp_input_name.strip_suffix("_input") {
             let label_file = format!("{}_label", temp_num);
             let label_path = hwmon_path.join(&label_file);
-            
+
             if label_path.exists() {
                 Ok(label_path.to_string_lossy().to_string())
             } else {
-                Err(FanCurveError::Config(format!("Label file not found: {}", label_file)))
+                Err(FanCurveError::Config(format!(
+                    "Label file not found: {}",
+                    label_file
+                )))
             }
         } else {
-            Err(FanCurveError::Config("Invalid temp input file format".to_string()))
+            Err(FanCurveError::Config(
+                "Invalid temp input file format".to_string(),
+            ))
         }
     }
 
     /// Read the current CPU temperature
     pub fn read_temperature(&self) -> Result<f32> {
-        let sensor = self.sensor.as_ref()
-            .ok_or_else(|| FanCurveError::Config("CPU temperature sensor not initialized".to_string()))?;
+        let sensor = self.sensor.as_ref().ok_or_else(|| {
+            FanCurveError::Config("CPU temperature sensor not initialized".to_string())
+        })?;
 
         let temp_content = fs::read_to_string(&sensor.temp_input_path)?;
 
         // Temperature is typically in millidegrees Celsius
-        let temp_millidegrees: i32 = temp_content.trim().parse()
+        let temp_millidegrees: i32 = temp_content
+            .trim()
+            .parse()
             .map_err(|_| FanCurveError::Config("Failed to parse temperature".to_string()))?;
 
         // Convert to degrees Celsius
         let temp_celsius = temp_millidegrees as f32 / 1000.0;
 
         // Validate temperature range (reasonable CPU temperature range)
-        if temp_celsius < -50.0 || temp_celsius > 200.0 {
+        if !(-50.0..=200.0).contains(&temp_celsius) {
             return Err(FanCurveError::Config(format!(
                 "Temperature reading out of range: {:.1}°C",
                 temp_celsius
@@ -228,7 +255,10 @@ impl CpuTempDetector {
 
     /// Get the detected CPU manufacturer
     pub fn manufacturer(&self) -> CpuManufacturer {
-        self.sensor.as_ref().map(|s| s.manufacturer.clone()).unwrap_or(CpuManufacturer::Unknown)
+        self.sensor
+            .as_ref()
+            .map(|s| s.manufacturer.clone())
+            .unwrap_or(CpuManufacturer::Unknown)
     }
 }
 

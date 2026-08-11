@@ -77,9 +77,7 @@ impl FanCurveClient {
             FanCurveCommands::Save => self.save_config().await,
             FanCurveCommands::Load => self.load_config().await,
             FanCurveCommands::Status => self.show_status().await,
-            FanCurveCommands::Test { duration } => {
-                self.test_fan_curve(duration).await
-            }
+            FanCurveCommands::Test { duration } => self.test_fan_curve(duration).await,
         }
     }
 
@@ -162,7 +160,10 @@ impl FanCurveClient {
             .await
             .map_err(Self::map_call_error)?;
 
-        println!("Default fan curve set to: {} (persists across reboots)", name);
+        println!(
+            "Default fan curve set to: {} (persists across reboots)",
+            name
+        );
         Ok(())
     }
 

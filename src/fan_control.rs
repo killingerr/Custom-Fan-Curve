@@ -1,8 +1,8 @@
-use std::fs;
-use std::path::Path;
 use crate::errors::FanCurveError;
 use crate::errors::Result;
-use log::{info, debug};
+use log::{debug, info};
+use std::fs;
+use std::path::Path;
 
 /// Fan control information
 #[derive(Debug, Clone)]
@@ -28,11 +28,11 @@ impl FanController {
     /// Initialize the fan controller by detecting Thelio IO board
     pub fn initialize(&mut self) -> Result<()> {
         info!("Initializing fan controller...");
-        
+
         // Look for Thelio IO board in hwmon
         let control_info = self.find_thelio_io_board()?;
         self.control_info = Some(control_info);
-        
+
         info!("Fan controller initialized: {:?}", self.control_info);
         Ok(())
     }
@@ -40,9 +40,11 @@ impl FanController {
     /// Find Thelio IO board in /sys/class/hwmon
     fn find_thelio_io_board(&self) -> Result<FanControlInfo> {
         let hwmon_dir = Path::new("/sys/class/hwmon");
-        
+
         if !hwmon_dir.exists() {
-            return Err(FanCurveError::Config("Hardware monitoring directory not found".to_string()));
+            return Err(FanCurveError::Config(
+                "Hardware monitoring directory not found".to_string(),
+            ));
         }
 
         let entries = fs::read_dir(hwmon_dir)?;
@@ -50,7 +52,7 @@ impl FanController {
         for entry in entries {
             let entry = entry?;
             let hwmon_path = entry.path();
-            
+
             if !hwmon_path.is_dir() {
                 continue;
             }
@@ -59,20 +61,20 @@ impl FanController {
             let name_path = hwmon_path.join("name");
             if let Ok(name_content) = fs::read_to_string(&name_path) {
                 let device_name = name_content.trim().to_string();
-                
+
                 // Look for Thelio IO board (this might be "thelio-io" or similar)
                 // We'll also check for common fan control devices
-                let is_fan_control_device = device_name.contains("thelio") || 
-                                          device_name.contains("io") ||
-                                          device_name.contains("pwm") ||
-                                          self.has_pwm_files(&hwmon_path);
+                let is_fan_control_device = device_name.contains("thelio")
+                    || device_name.contains("io")
+                    || device_name.contains("pwm")
+                    || self.has_pwm_files(&hwmon_path);
 
                 if is_fan_control_device {
                     // Check if this device has PWM control files
                     if let Ok(pwm_path) = self.find_pwm_file(&hwmon_path) {
                         let fan_input_path = self.find_fan_input_file(&hwmon_path)?;
                         let fan_label_path = self.find_fan_label_file(&hwmon_path)?;
-                        
+
                         return Ok(FanControlInfo {
                             hwmon_path: hwmon_path.to_string_lossy().to_string(),
                             pwm_path,
@@ -85,7 +87,9 @@ impl FanController {
             }
         }
 
-        Err(FanCurveError::Config("Could not find Thelio IO board or compatible fan control device".to_string()))
+        Err(FanCurveError::Config(
+            "Could not find Thelio IO board or compatible fan control device".to_string(),
+        ))
     }
 
     /// Check if a hwmon device has PWM files
@@ -119,7 +123,9 @@ impl FanController {
                 return Ok(fan_file.to_string_lossy().to_string());
             }
         }
-        Err(FanCurveError::Config("No fan input files found".to_string()))
+        Err(FanCurveError::Config(
+            "No fan input files found".to_string(),
+        ))
     }
 
     /// Find fan label file
@@ -130,31 +136,42 @@ impl FanController {
                 return Ok(fan_file.to_string_lossy().to_string());
             }
         }
-        Err(FanCurveError::Config("No fan label files found".to_string()))
+        Err(FanCurveError::Config(
+            "No fan label files found".to_string(),
+        ))
     }
 
     /// Set fan PWM value (0-255)
     pub fn set_fan_pwm(&self, pwm_value: u8) -> Result<()> {
-        let control_info = self.control_info.as_ref()
+        let control_info = self
+            .control_info
+            .as_ref()
             .ok_or_else(|| FanCurveError::Config("Fan controller not initialized".to_string()))?;
 
         // PWM value is already validated by the u8 type (0-255)
 
         // Write PWM value to the control file
-        fs::write(&control_info.pwm_path, pwm_value.to_string())
-            .map_err(|e| FanCurveError::Io(e))?;
+        fs::write(&control_info.pwm_path, pwm_value.to_string()).map_err(FanCurveError::Io)?;
 
-        debug!("Set fan PWM to {} ({}%)", pwm_value, (pwm_value as f32 / 255.0 * 100.0) as u8);
+        debug!(
+            "Set fan PWM to {} ({}%)",
+            pwm_value,
+            (pwm_value as f32 / 255.0 * 100.0) as u8
+        );
         Ok(())
     }
 
     /// Read current fan speed in RPM
     pub fn read_fan_speed(&self) -> Result<u16> {
-        let control_info = self.control_info.as_ref()
+        let control_info = self
+            .control_info
+            .as_ref()
             .ok_or_else(|| FanCurveError::Config("Fan controller not initialized".to_string()))?;
 
         let speed_content = fs::read_to_string(&control_info.fan_input_path)?;
-        let speed: u16 = speed_content.trim().parse()
+        let speed: u16 = speed_content
+            .trim()
+            .parse()
             .map_err(|_| FanCurveError::Config("Failed to parse fan speed".to_string()))?;
 
         Ok(speed)
@@ -162,11 +179,15 @@ impl FanController {
 
     /// Read current PWM value
     pub fn read_fan_pwm(&self) -> Result<u8> {
-        let control_info = self.control_info.as_ref()
+        let control_info = self
+            .control_info
+            .as_ref()
             .ok_or_else(|| FanCurveError::Config("Fan controller not initialized".to_string()))?;
 
         let pwm_content = fs::read_to_string(&control_info.pwm_path)?;
-        let pwm: u8 = pwm_content.trim().parse()
+        let pwm: u8 = pwm_content
+            .trim()
+            .parse()
             .map_err(|_| FanCurveError::Config("Failed to parse PWM value".to_string()))?;
 
         Ok(pwm)
@@ -175,7 +196,9 @@ impl FanController {
     /// Set fan duty cycle as percentage (0-100)
     pub fn set_fan_duty(&self, duty_percent: u8) -> Result<()> {
         if duty_percent > 100 {
-            return Err(FanCurveError::Config("Duty cycle must be between 0 and 100".to_string()));
+            return Err(FanCurveError::Config(
+                "Duty cycle must be between 0 and 100".to_string(),
+            ));
         }
 
         // Convert percentage to PWM value (0-255)
