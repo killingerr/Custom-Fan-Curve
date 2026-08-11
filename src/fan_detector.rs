@@ -68,10 +68,7 @@ impl FanDetector {
             }
 
             if pwm_enable_path.exists() {
-                info!(
-                    "PWM enable file exists: {}",
-                    pwm_enable_path.display()
-                );
+                info!("PWM enable file exists: {}", pwm_enable_path.display());
             } else {
                 info!(
                     "PWM enable file missing: {} (may not be required)",
@@ -403,10 +400,7 @@ impl FanDetector {
                 }
 
                 // Enable manual PWM control
-                info!(
-                    "Enabling manual PWM control for fan {}...",
-                    fan.fan_number
-                );
+                info!("Enabling manual PWM control for fan {}...", fan.fan_number);
                 if let Err(e) = fs::write(&pwm_enable_path, "1") {
                     warn!(
                         "Failed to enable PWM control for fan {} at {}: {}",
@@ -420,10 +414,7 @@ impl FanDetector {
                 }
 
                 // Set PWM duty
-                info!(
-                    "Setting PWM duty to {} for fan {}...",
-                    duty, fan.fan_number
-                );
+                info!("Setting PWM duty to {} for fan {}...", duty, fan.fan_number);
                 if let Err(e) = fs::write(&pwm_path, &duty_str) {
                     error!(
                         "Failed to set PWM duty for fan {} at {}: {}",
@@ -486,10 +477,7 @@ impl FanDetector {
                             ),
                         }
                     }
-                    Err(e) => warn!(
-                        "Failed to read PWM value for fan {}: {}",
-                        fan.fan_number, e
-                    ),
+                    Err(e) => warn!("Failed to read PWM value for fan {}: {}", fan.fan_number, e),
                 }
             } else {
                 warn!(
