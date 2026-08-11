@@ -6,19 +6,23 @@ use fan_curve_app::{
     args::Args, client::FanCurveClient, daemon::FanCurveDaemon, fan_curve_gui::FanCurveApp, logging,
 };
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Parse command line arguments
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-
-    // Setup logging
     logging::setup(args.verbose).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
-    // Handle GUI mode
+    // GUI uses zbus's blocking API, which cannot run inside a Tokio runtime.
+    // Keep this path fully synchronous.
     if args.gui {
         return run_gui().map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
     }
 
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(async_main(args))
+}
+
+async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     // Handle daemon mode
     if let Some(fan_curve_app::args::Commands::Daemon) = args.command {
         let daemon =

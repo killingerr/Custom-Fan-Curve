@@ -181,6 +181,8 @@ setup_configuration() {
     mkdir -p "$CONFIG_DIR"
     
     # Create default config if it doesn't exist
+    # NOTE: duty values are in ten-thousandths of a percent (10000 = 100%),
+    # matching the system76-power convention used internally by the app.
     if [ ! -f "$CONFIG_DIR/config.json" ]; then
         print_status "Creating default configuration..."
         cat > "$CONFIG_DIR/config.json" << 'EOF'
@@ -190,54 +192,77 @@ setup_configuration() {
       "name": "Standard",
       "points": [
         {"temp": 0, "duty": 0},
-        {"temp": 30, "duty": 20},
-        {"temp": 40, "duty": 30},
-        {"temp": 50, "duty": 40},
-        {"temp": 60, "duty": 50},
-        {"temp": 70, "duty": 60},
-        {"temp": 80, "duty": 70},
-        {"temp": 90, "duty": 80},
-        {"temp": 100, "duty": 100}
+        {"temp": 30, "duty": 2000},
+        {"temp": 40, "duty": 3000},
+        {"temp": 50, "duty": 4000},
+        {"temp": 60, "duty": 5000},
+        {"temp": 70, "duty": 6000},
+        {"temp": 80, "duty": 7000},
+        {"temp": 90, "duty": 8000},
+        {"temp": 100, "duty": 10000}
       ]
     },
     {
       "name": "Quiet",
       "points": [
         {"temp": 0, "duty": 0},
-        {"temp": 35, "duty": 10},
-        {"temp": 45, "duty": 20},
-        {"temp": 55, "duty": 30},
-        {"temp": 65, "duty": 40},
-        {"temp": 75, "duty": 50},
-        {"temp": 85, "duty": 60},
-        {"temp": 95, "duty": 70},
-        {"temp": 100, "duty": 80}
+        {"temp": 35, "duty": 1000},
+        {"temp": 45, "duty": 2000},
+        {"temp": 55, "duty": 3000},
+        {"temp": 65, "duty": 4000},
+        {"temp": 75, "duty": 5000},
+        {"temp": 85, "duty": 6000},
+        {"temp": 95, "duty": 7000},
+        {"temp": 100, "duty": 8000}
       ]
     },
     {
       "name": "Performance",
       "points": [
         {"temp": 0, "duty": 0},
-        {"temp": 25, "duty": 20},
-        {"temp": 35, "duty": 30},
-        {"temp": 45, "duty": 40},
-        {"temp": 55, "duty": 50},
-        {"temp": 65, "duty": 60},
-        {"temp": 75, "duty": 70},
-        {"temp": 85, "duty": 80},
-        {"temp": 95, "duty": 90},
-        {"temp": 100, "duty": 100}
+        {"temp": 25, "duty": 2000},
+        {"temp": 35, "duty": 3000},
+        {"temp": 45, "duty": 4000},
+        {"temp": 55, "duty": 5000},
+        {"temp": 65, "duty": 6000},
+        {"temp": 75, "duty": 7000},
+        {"temp": 85, "duty": 8000},
+        {"temp": 95, "duty": 9000},
+        {"temp": 100, "duty": 10000}
       ]
     }
   ],
-  "default_curve_index": 0,
-  "auto_start": false,
-  "polling_interval": 1000
+  "default_curve_index": 0
 }
 EOF
         print_success "Default configuration created"
     else
         print_status "Configuration already exists, skipping"
+    fi
+}
+
+install_daemon() {
+    print_step "Installing fan curve daemon (DBus policy + systemd service)..."
+
+    # DBus policy: allows root to own the service name and users to call it
+    sudo cp "data/com.system76.FanCurveDaemon.conf" /usr/share/dbus-1/system.d/
+
+    # Systemd unit
+    sudo cp "data/fan-curve-daemon.service" /etc/systemd/system/
+
+    # System-wide config for the daemon (seeded from the user config)
+    sudo mkdir -p /etc/fan-curve-app
+    if [ ! -f /etc/fan-curve-app/config.json ]; then
+        sudo cp "$CONFIG_DIR/config.json" /etc/fan-curve-app/config.json
+    fi
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now fan-curve-daemon.service
+
+    if systemctl is-active --quiet fan-curve-daemon.service; then
+        print_success "Fan curve daemon is running"
+    else
+        print_warning "Daemon may not be running. Check with: sudo systemctl status fan-curve-daemon"
     fi
 }
 
@@ -355,6 +380,13 @@ create_uninstall_script() {
 
 echo "Uninstalling Fan Curve Control App..."
 
+# Stop and remove the daemon
+sudo systemctl disable --now fan-curve-daemon.service 2>/dev/null || true
+sudo rm -f /etc/systemd/system/fan-curve-daemon.service
+sudo rm -f /usr/share/dbus-1/system.d/com.system76.FanCurveDaemon.conf
+sudo rm -rf /etc/fan-curve-app
+sudo systemctl daemon-reload
+
 # Remove binary and symlink
 sudo rm -f /usr/local/bin/fan-curve-app
 sudo rm -f /usr/local/bin/fan-curve
@@ -415,9 +447,20 @@ show_completion_message() {
     echo -e "${GREEN}========================================${NC}"
     echo ""
     echo -e "${CYAN}Usage:${NC}"
-    echo "  fan-curve --gui              # Launch GUI"
-    echo "  fan-curve --help             # Show help"
-    echo "  fan-curve list               # List available curves"
+    echo "  fan-curve --gui                       # Launch GUI"
+    echo "  fan-curve --help                      # Show help"
+    echo "  fan-curve fan-curve list              # List available curves"
+    echo "  fan-curve fan-curve set \"Standard\"    # Apply a curve via the daemon"
+    echo ""
+    echo -e "${CYAN}Daemon:${NC}"
+    echo "  Status:  sudo systemctl status fan-curve-daemon"
+    echo "  Logs:    sudo journalctl -u fan-curve-daemon -f"
+    echo "  Config:  /etc/fan-curve-app/config.json"
+    echo ""
+    echo -e "${CYAN}Curves:${NC}"
+    echo "  On boot the daemon always loads the saved default curve."
+    echo "  'Apply' switches for this session only; reboot returns to default."
+    echo "  'Set as Default' (or: fan-curve fan-curve set-default NAME) persists across reboots."
     echo ""
     echo -e "${CYAN}File locations:${NC}"
     echo "  Binary: $INSTALL_DIR/$APP_NAME"
@@ -494,6 +537,7 @@ main() {
     download_and_build
     install_application
     setup_configuration
+    install_daemon
     
     if [ "$skip_icon" = false ]; then
         install_icon

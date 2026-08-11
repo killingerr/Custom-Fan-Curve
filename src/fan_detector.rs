@@ -99,7 +99,10 @@ impl FanDetector {
                         let name = name_content.trim();
                         info!("Checking hwmon device: {} -> '{}'", path.display(), name);
                         
-                        if name == "system76_thelio_io" || name == "system76" {
+                        if name == "system76_thelio_io"
+                            || name == "system76_io"
+                            || name == "system76"
+                        {
                             self.hwmon_path = Some(path.to_string_lossy().to_string());
                             info!("Found System76 sensor '{}' at: {}", name, path.display());
                             return Ok(());

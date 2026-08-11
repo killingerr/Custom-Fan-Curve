@@ -14,6 +14,12 @@ impl FanPoint {
     pub fn new(temp: i16, duty: u16) -> Self {
         Self { temp, duty }
     }
+
+    /// Convert stored duty (ten-thousandths, 0-10000) to a whole percent (0-100)
+    /// for UI / CLI display. e.g. 5000 -> 50.
+    pub fn duty_percent(&self) -> u16 {
+        self.duty / 100
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -75,17 +81,17 @@ impl FanCurve {
             return 0;
         }
 
-        // Convert thousandths to tenths for comparison with curve points
-        // 30000 thousandths = 30.0°C = 30 tenths (if curve points are in tenths)
-        let temp_tenths = (temp_thousandths / 1000) as i16;
+        // Convert thousandths of Celsius to whole degrees, since curve points
+        // store temperature in whole °C (e.g. 30000 thousandths -> 30°C)
+        let temp_celsius = (temp_thousandths / 1000) as i16;
 
         // If temperature is below the lowest point, return the duty of the lowest point
-        if temp_tenths <= self.points[0].temp {
+        if temp_celsius <= self.points[0].temp {
             return self.points[0].duty;
         }
 
         // If temperature is above the highest point, return the duty of the highest point
-        if temp_tenths >= self.points.last().unwrap().temp {
+        if temp_celsius >= self.points.last().unwrap().temp {
             return self.points.last().unwrap().duty;
         }
 
@@ -94,13 +100,13 @@ impl FanCurve {
             let point1 = &self.points[i];
             let point2 = &self.points[i + 1];
 
-            if temp_tenths >= point1.temp && temp_tenths <= point2.temp {
+            if temp_celsius >= point1.temp && temp_celsius <= point2.temp {
                 // Linear interpolation between the two points
                 let temp1 = point1.temp as f32;
                 let temp2 = point2.temp as f32;
                 let duty1 = point1.duty as f32;
                 let duty2 = point2.duty as f32;
-                let temp_current = temp_tenths as f32;
+                let temp_current = temp_celsius as f32;
 
                 // Calculate the interpolation factor
                 let factor = (temp_current - temp1) / (temp2 - temp1);
@@ -229,6 +235,11 @@ impl FanCurveConfig {
     }
 
     pub fn get_config_path() -> std::path::PathBuf {
+        // Explicit override, used by the system daemon (e.g. via systemd
+        // Environment=) so it doesn't depend on $HOME
+        if let Ok(path) = std::env::var("FAN_CURVE_APP_CONFIG") {
+            return std::path::PathBuf::from(path);
+        }
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
         std::path::PathBuf::from(home)
             .join(".fan_curve_app")

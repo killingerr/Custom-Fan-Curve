@@ -11,6 +11,9 @@ pub struct FanCurveApp {
     new_curve_name: String,
     show_save_dialog: bool,
     fan_monitor: FanMonitor,
+    /// Proxy to the fan curve daemon; when present, the daemon owns the
+    /// hardware and the GUI only sends commands over DBus
+    daemon: Option<zbus::blocking::Proxy<'static>>,
     last_applied_curve_index: Option<usize>,
     current_fan_data: Option<crate::fan_monitor::FanDataPoint>,
     last_fan_data_update: std::time::Instant,
@@ -23,38 +26,89 @@ pub struct FanCurveApp {
     edit_point_duty: String,
 }
 
+/// Try to connect to the fan curve daemon on the system bus.
+/// Returns None if the bus is unreachable or the daemon isn't running.
+fn connect_daemon() -> Option<zbus::blocking::Proxy<'static>> {
+    let connection = zbus::blocking::Connection::system().ok()?;
+
+    // Check name ownership first so later calls fail fast instead of hanging
+    let dbus = zbus::blocking::fdo::DBusProxy::new(&connection).ok()?;
+    let name = zbus::names::BusName::try_from(crate::DBUS_SERVICE_NAME).ok()?;
+    if !dbus.name_has_owner(name).ok()? {
+        return None;
+    }
+
+    zbus::blocking::Proxy::new(
+        &connection,
+        crate::DBUS_SERVICE_NAME,
+        crate::DBUS_OBJECT_PATH,
+        crate::DBUS_INTERFACE_NAME,
+    )
+    .ok()
+}
+
+/// Load curves from the daemon when connected, otherwise from the local config file.
+fn load_initial_curves(
+    daemon: Option<&zbus::blocking::Proxy<'static>>,
+) -> (Vec<FanCurve>, Option<usize>, usize) {
+    if let Some(proxy) = daemon {
+        if let Ok(curves) = proxy.call::<_, _, Vec<FanCurve>>("GetFanCurves", &()) {
+            if !curves.is_empty() {
+                let default_index = proxy
+                    .call::<_, _, FanCurve>("GetDefaultFanCurve", &())
+                    .ok()
+                    .and_then(|d| curves.iter().position(|c| c.name() == d.name()));
+                let current_index = proxy
+                    .call::<_, _, FanCurve>("GetCurrentFanCurve", &())
+                    .ok()
+                    .and_then(|c| curves.iter().position(|x| x.name() == c.name()))
+                    .or(default_index)
+                    .unwrap_or(0);
+                return (curves, default_index.or(Some(0)), current_index);
+            }
+        }
+    }
+
+    let config_path = FanCurveConfig::get_config_path();
+    let config = if config_path.exists() {
+        FanCurveConfig::load_from_file(&config_path).unwrap_or_else(|_| FanCurveConfig::new())
+    } else {
+        FanCurveConfig::new()
+    };
+    let default = config.default_curve_index.or(Some(0));
+    let current = default.unwrap_or(0).min(config.curves.len().saturating_sub(1));
+    (config.curves, default, current)
+}
+
 impl FanCurveApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        // Try to load existing config, fallback to default
-        let config_path = FanCurveConfig::get_config_path();
-        let (fan_curves, default_curve_index) = if config_path.exists() {
-            match FanCurveConfig::load_from_file(&config_path) {
-                Ok(config) => (config.curves, config.default_curve_index),
-                Err(_) => {
-                    let default_config = FanCurveConfig::new();
-                    (default_config.curves, default_config.default_curve_index)
-                }
-            }
-        } else {
-            let default_config = FanCurveConfig::new();
-            (default_config.curves, default_config.default_curve_index)
-        };
+        // Prefer the daemon's persisted config when available so the GUI
+        // matches what survives reboot; fall back to the user config file.
+        let daemon = connect_daemon();
+        let (fan_curves, default_curve_index, current_curve_index) =
+            load_initial_curves(daemon.as_ref());
 
         let mut fan_monitor = FanMonitor::new();
-        // Initialize the fan monitor to detect CPU temperature sensor
         if let Err(e) = fan_monitor.initialize() {
             eprintln!("Warning: Failed to initialize CPU temperature detection: {}", e);
             eprintln!("Falling back to simulation mode");
         }
 
+        if daemon.is_some() {
+            println!("Connected to fan curve daemon; daemon controls the fans");
+        } else {
+            println!("Fan curve daemon not running; GUI controls the fans directly");
+        }
+
         Self {
             fan_curves,
-            current_curve_index: default_curve_index.unwrap_or(0),
+            current_curve_index,
             default_curve_index,
             status_message: None,
             new_curve_name: String::new(),
             show_save_dialog: false,
             fan_monitor,
+            daemon,
             current_fan_data: None,
             last_fan_data_update: std::time::Instant::now(),
             show_add_point_dialog: false,
@@ -109,13 +163,43 @@ impl FanCurveApp {
         self.status_message = Some(message);
     }
 
+    /// Push the local curve list to the daemon so its control loop uses it.
+    /// Returns Ok(true) if the push succeeded, Ok(false) if no daemon is connected.
+    fn push_config_to_daemon(&mut self) -> std::result::Result<bool, String> {
+        if self.daemon.is_none() {
+            self.daemon = connect_daemon();
+        }
+
+        let Some(ref proxy) = self.daemon else {
+            return Ok(false);
+        };
+
+        let curves = self.fan_curves.clone();
+        let default_index = self.default_curve_index.map(|i| i as i32).unwrap_or(-1);
+        let current_name = self.fan_curves[self.current_curve_index].name().to_string();
+
+        proxy
+            .call::<_, _, ()>(
+                "SetConfig",
+                &(curves, default_index, current_name.as_str()),
+            )
+            .map_err(|e| e.to_string())?;
+
+        Ok(true)
+    }
+
     /// Auto-save configuration with error handling
     fn auto_save_config(&mut self) {
         if let Err(e) = self.save_config() {
             eprintln!("Auto-save failed: {}", e);
             self.set_status(format!("Auto-save failed: {}", e));
-        } else {
-            self.set_status("Configuration saved".to_string());
+            return;
+        }
+
+        match self.push_config_to_daemon() {
+            Ok(true) => self.set_status("Configuration saved and pushed to daemon".to_string()),
+            Ok(false) => self.set_status("Configuration saved".to_string()),
+            Err(e) => self.set_status(format!("Saved locally, but daemon push failed: {}", e)),
         }
     }
 }
@@ -124,31 +208,38 @@ impl eframe::App for FanCurveApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Always update live fan data every 1s
         if self.last_fan_data_update.elapsed() >= std::time::Duration::from_secs(1) {
-            // Ensure the monitor is using the currently selected curve
-            if self.last_applied_curve_index != Some(self.current_curve_index) {
-                self.fan_monitor
-                    .set_fan_curve(self.fan_curves[self.current_curve_index].clone());
-                self.last_applied_curve_index = Some(self.current_curve_index);
+            // Prefer telemetry from the daemon when connected
+            let mut used_daemon_status = false;
+            if let Some(ref proxy) = self.daemon {
+                if let Ok((temp, duty, _pwm, speeds)) =
+                    proxy.call::<_, _, (f64, u16, u8, Vec<(u8, u16, String)>)>("GetStatus", &())
+                {
+                    self.current_fan_data = Some(crate::fan_monitor::FanDataPoint {
+                        timestamp: chrono::Local::now(),
+                        temperature: temp as f32,
+                        fan_speeds: speeds,
+                        fan_duty: duty,
+                        cpu_usage: 0.0,
+                    });
+                    self.last_fan_data_update = std::time::Instant::now();
+                    used_daemon_status = true;
+                }
             }
 
-            if let Ok(data) = self.fan_monitor.get_current_fan_data_sync() {
-                // Convert duty from ten-thousandths to percentage for display
-                let duty_percentage = data.fan_duty / 100;
-                println!(
-                    "🔄 GUI: Updated fan data - Temp: {:.1}°C, Fans: {}, Duty: {}%",
-                    data.temperature, 
-                    if data.fan_speeds.is_empty() {
-                        "No fans".to_string()
-                    } else {
-                        data.fan_speeds.iter()
-                            .map(|(_num, speed, label)| format!("{}: {} RPM", label, speed))
-                            .collect::<Vec<_>>()
-                            .join(" | ")
-                    },
-                    duty_percentage
-                );
-                self.current_fan_data = Some(data);
-                self.last_fan_data_update = std::time::Instant::now();
+            if !used_daemon_status {
+                // Ensure the monitor is using the currently selected curve
+                if self.last_applied_curve_index != Some(self.current_curve_index) {
+                    self.fan_monitor
+                        .set_fan_curve(self.fan_curves[self.current_curve_index].clone());
+                    self.last_applied_curve_index = Some(self.current_curve_index);
+                }
+
+                if let Ok(data) = self.fan_monitor.get_current_fan_data_sync() {
+                    // Never write PWM from the GUI — sysfs requires root.
+                    // Hardware control belongs exclusively to the daemon.
+                    self.current_fan_data = Some(data);
+                    self.last_fan_data_update = std::time::Instant::now();
+                }
             }
         }
 
@@ -185,6 +276,24 @@ impl eframe::App for FanCurveApp {
                 });
             }
 
+            ui.horizontal(|ui| {
+                ui.label("🔌 Daemon:");
+                if self.daemon.is_some() {
+                    ui.colored_label(egui::Color32::GREEN, "connected (daemon controls fans)");
+                } else {
+                    ui.colored_label(
+                        egui::Color32::RED,
+                        "not running — fans will NOT be controlled",
+                    );
+                }
+            });
+            if self.daemon.is_none() {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    "Start: sudo ./scripts/install-daemon.sh   (or: sudo systemctl start fan-curve-daemon)",
+                );
+            }
+
             ui.separator();
 
             // Current fan profile display
@@ -214,7 +323,7 @@ impl eframe::App for FanCurveApp {
             for (i, point) in self.fan_curves[self.current_curve_index].points().iter().enumerate() {
                 ui.horizontal(|ui| {
                     ui.label(format!("Point {}: ", i + 1));
-                    ui.label(format!("{}°C -> {}%", point.temp, point.duty));
+                    ui.label(format!("{}°C -> {}%", point.temp, point.duty_percent()));
 
                     ui.add_space(10.0);
 
@@ -222,7 +331,7 @@ impl eframe::App for FanCurveApp {
                         self.show_edit_point_dialog = true;
                         self.edit_point_index = Some(i);
                         self.edit_point_temp = point.temp.to_string();
-                        self.edit_point_duty = point.duty.to_string();
+                        self.edit_point_duty = point.duty_percent().to_string();
                     }
 
                     ui.add_space(5.0);
@@ -239,7 +348,7 @@ impl eframe::App for FanCurveApp {
                     self.set_status(format!("Removed point {}: {}°C -> {}%",
                         index + 1,
                         removed_point.temp,
-                        removed_point.duty
+                        removed_point.duty_percent()
                     ));
                     // Auto-save after removing point
                     self.auto_save_config();
@@ -260,20 +369,61 @@ impl eframe::App for FanCurveApp {
                 self.show_save_dialog = true;
             }
 
-            // Apply button
+            // Apply button — temporary for this session; reboot returns to default
             if ui.button("Apply Fan Curve").clicked() {
-                match self.save_config() {
-                    Ok(_) => self.set_status("Fan curve applied and saved!".to_string()),
-                    Err(e) => self.set_status(format!("Failed to save: {}", e)),
+                if let Err(e) = self.save_config() {
+                    self.set_status(format!("Failed to save: {}", e));
+                } else {
+                    let default_name = self
+                        .default_curve_index
+                        .and_then(|i| self.fan_curves.get(i))
+                        .map(|c| c.name().to_string())
+                        .unwrap_or_else(|| "Standard".to_string());
+                    let name = self.fan_curves[self.current_curve_index].name().to_string();
+                    match self.push_config_to_daemon() {
+                        Ok(true) => {
+                            self.set_status(format!(
+                                "Applied '{}' for this session. Reboot returns to default '{}'.",
+                                name, default_name
+                            ));
+                        }
+                        Ok(false) => {
+                            self.set_status(
+                                "Daemon not running — curve saved but fans are NOT controlled. Run: sudo ./scripts/install-daemon.sh"
+                                    .to_string(),
+                            );
+                        }
+                        Err(e) => {
+                            self.set_status(format!(
+                                "Saved locally, but daemon rejected config: {}",
+                                e
+                            ));
+                        }
+                    }
                 }
             }
 
-            // Set as default button
+            // Set as default — persists across reboots via the daemon config
             if ui.button("Set as Default").clicked() {
                 self.default_curve_index = Some(self.current_curve_index);
-                match self.save_config() {
-                    Ok(_) => self.set_status("Set as default and saved!".to_string()),
-                    Err(e) => self.set_status(format!("Failed to save: {}", e)),
+                let name = self.fan_curves[self.current_curve_index].name().to_string();
+                if let Err(e) = self.save_config() {
+                    self.set_status(format!("Failed to save: {}", e));
+                } else {
+                    match self.push_config_to_daemon() {
+                        Ok(true) => self.set_status(format!(
+                            "'{}' is now the default and will be used after reboot.",
+                            name
+                        )),
+                        Ok(false) => self.set_status(format!(
+                            "'{}' saved as default locally. Start the daemon so it persists across reboots.",
+                            name
+                        )),
+                        Err(e) => self.set_status(format!(
+                            "Saved locally, but daemon rejected default: {}",
+                            e
+                        )),
+                    }
                 }
             }
 
@@ -372,7 +522,8 @@ impl eframe::App for FanCurveApp {
                             self.new_point_temp.parse::<i16>(),
                             self.new_point_duty.parse::<u16>()
                         ) {
-                            self.fan_curves[self.current_curve_index].add_point(temp, duty);
+                            // Dialog input is percent; store as ten-thousandths (0-10000)
+                            self.fan_curves[self.current_curve_index].add_point(temp, duty * 100);
                             self.set_status(format!("Added point: {}°C -> {}%", temp, duty));
                             // Auto-save after adding point
                             self.auto_save_config();
@@ -448,8 +599,9 @@ impl eframe::App for FanCurveApp {
                             if let Some(index) = self.edit_point_index {
                                 if index < self.fan_curves[self.current_curve_index].points().len() {
                                     // Remove the old point and add the new one
+                                    // Dialog input is percent; store as ten-thousandths (0-10000)
                                     if let Some(_old_point) = self.fan_curves[self.current_curve_index].remove_point(index) {
-                                        self.fan_curves[self.current_curve_index].add_point(temp, duty);
+                                        self.fan_curves[self.current_curve_index].add_point(temp, duty * 100);
                                         self.set_status(format!("Updated point {}: {}°C -> {}%", index + 1, temp, duty));
                                         // Auto-save after editing point
                                         self.auto_save_config();
@@ -549,7 +701,7 @@ impl eframe::App for FanCurveApp {
                                             } else {
                                                 egui::Color32::GREEN
                                             },
-                                            format!("{}%", data.fan_duty / 100),
+                                            format!("{}%", data.fan_duty / 100), // ten-thousandths → %
                                         );
                                     });
                                     ui.horizontal(|ui| {

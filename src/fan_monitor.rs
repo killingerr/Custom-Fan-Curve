@@ -1,6 +1,5 @@
 use crate::errors::Result;
 use crate::cpu_temp::CpuTempDetector;
-use crate::fan_control::FanController;
 use crate::fan_detector::FanDetector;
 use crate::system76_power_client::System76PowerClient;
 use chrono::{DateTime, Local};
@@ -28,7 +27,6 @@ pub struct FanMonitor {
     last_log_time: Instant,
     current_fan_curve: Option<crate::fan::FanCurve>,
     cpu_temp_detector: CpuTempDetector,
-    fan_controller: FanController,
     fan_detector: FanDetector,
     system76_power_client: Option<System76PowerClient>,
     dbus_connection: Option<Connection>,
@@ -42,7 +40,6 @@ impl FanMonitor {
             last_log_time: Instant::now(),
             current_fan_curve: None,
             cpu_temp_detector: CpuTempDetector::new(),
-            fan_controller: FanController::new(),
             fan_detector: FanDetector::new(),
             system76_power_client: None,
             dbus_connection: None,
@@ -59,11 +56,6 @@ impl FanMonitor {
         // Initialize fan detection
         if let Err(e) = self.fan_detector.initialize() {
             warn!("Failed to initialize fan detection: {}", e);
-        }
-        
-        // Initialize fan controller for PWM control
-        if let Err(e) = self.fan_controller.initialize() {
-            warn!("Failed to initialize fan controller: {}", e);
         }
         
         info!("Fan monitor initialized with {} fans detected", self.fan_detector.fan_count());
@@ -156,7 +148,7 @@ impl FanMonitor {
                 .msg_type(zbus::MessageType::Signal)
                 .sender("com.system76.FanCurveDaemon")?
                 .path("/com/system76/FanCurveDaemon")?
-                .member("fan_curve_changed")?
+                .member("FanCurveChanged")?
                 .build();
 
             // Subscribe to the signal
@@ -226,20 +218,13 @@ impl FanMonitor {
         Ok(())
     }
 
-    /// Get current fan data
+    /// Get current fan data (read-only; applying duty to hardware is done
+    /// separately via `apply_duty` / `apply_fan_curve`)
     pub fn get_current_fan_data_sync(&self) -> Result<FanDataPoint> {
-        // Read real CPU temperature
         let temperature = self.read_cpu_temperature()?;
         let fan_speeds = self.read_fan_speeds()?;
         let fan_duty = self.calculate_fan_duty_from_curve(temperature);
         let cpu_usage = self.read_cpu_usage()?;
-
-        // Apply fan curve to hardware if controller is available
-        if self.fan_controller.is_initialized() {
-            if let Err(e) = self.fan_controller.set_fan_duty(fan_duty as u8) {
-                warn!("Failed to set fan duty: {}", e);
-            }
-        }
 
         Ok(FanDataPoint {
             timestamp: chrono::Local::now(),
@@ -252,26 +237,7 @@ impl FanMonitor {
 
     /// Get current fan data - async version
     pub async fn get_current_fan_data(&self) -> Result<FanDataPoint> {
-        // Read real CPU temperature
-        let temperature = self.read_cpu_temperature()?;
-        let fan_speeds = self.read_fan_speeds()?;
-        let fan_duty = self.calculate_fan_duty_from_curve(temperature);
-        let cpu_usage = self.read_cpu_usage()?;
-
-        // Apply fan curve to hardware if controller is available
-        if self.fan_controller.is_initialized() {
-            if let Err(e) = self.fan_controller.set_fan_duty(fan_duty as u8) {
-                warn!("Failed to set fan duty: {}", e);
-            }
-        }
-
-        Ok(FanDataPoint {
-            timestamp: chrono::Local::now(),
-            temperature,
-            fan_speeds,
-            fan_duty,
-            cpu_usage,
-        })
+        self.get_current_fan_data_sync()
     }
 
     /// Log fan data if monitoring is enabled
@@ -415,6 +381,48 @@ impl FanMonitor {
         ((u32::from(duty) * 255) / 10000) as u8
     }
 
+    /// Apply a duty (0-10000, ten-thousandths) to all fans.
+    /// Converts to the hwmon PWM scale (0-255) and writes via the fan detector,
+    /// falling back to direct CPU-fan control if the bulk write fails.
+    pub fn apply_duty(&self, duty: u16) -> Result<()> {
+        if !self.fan_detector.is_initialized() {
+            warn!("Fan detector not initialized, cannot apply duty");
+            return Ok(());
+        }
+
+        let pwm_value = self.duty_to_pwm(duty);
+
+        match self.fan_detector.set_duty(Some(pwm_value)) {
+            Ok(()) => {
+                info!("✅ Applied PWM {} to all fans (duty: {}%)", pwm_value, duty / 100);
+                if let Err(e) = self.fan_detector.verify_pwm_values() {
+                    warn!("⚠️  PWM verification failed: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("❌ Failed to set fan PWM via set_duty: {}", e);
+
+                // Fallback to individual CPU fan control
+                if let Some(cpu_fan) = self.fan_detector.get_cpu_fan() {
+                    info!("🔄 Fallback: Applying direct PWM control to CPU fan {} -> PWM {}", 
+                          cpu_fan.fan_number, pwm_value);
+                    match self.fan_detector.set_fan_pwm(cpu_fan.fan_number, pwm_value) {
+                        Ok(()) => {
+                            info!("✅ Fallback successful: CPU fan {} PWM set to {}", cpu_fan.fan_number, pwm_value);
+                        }
+                        Err(fallback_e) => {
+                            error!("❌ Fallback failed: Could not set CPU fan PWM directly: {}", fallback_e);
+                        }
+                    }
+                } else {
+                    error!("❌ No CPU fan found for direct PWM control fallback");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Apply fan curve to hardware via System76 Power DBus interface and direct PWM control
     pub async fn apply_fan_curve(&self, temperature: f32) -> Result<()> {
         if !self.fan_detector.is_initialized() {
@@ -444,49 +452,8 @@ impl FanMonitor {
         } else {
             warn!("System76 Power client not initialized");
         }
-        
-        // Convert duty (0-10000) to PWM value (0-255) using system76-power formula
-        let pwm_value = self.duty_to_pwm(duty);
-        info!("⚡ PWM conversion: {} duty -> {} PWM (formula: ({} * 255) / 10000)", 
-              duty, pwm_value, duty);
-        
-        // Special logging for PWM 255 test
-        if pwm_value == 255 {
-            info!("🔥 TEST MODE: PWM 255 DETECTED - This should make fans run at maximum speed!");
-        }
-        
-        // Apply to all fans using the new set_duty method (matches system76-power approach)
-        match self.fan_detector.set_duty(Some(pwm_value)) {
-            Ok(()) => {
-                info!("✅ Successfully applied PWM control to all fans: {} (duty: {}%)", pwm_value, duty_percentage);
-                
-                // Verify the PWM values were actually set
-                if let Err(e) = self.fan_detector.verify_pwm_values() {
-                    warn!("⚠️  PWM verification failed: {}", e);
-                }
-            }
-            Err(e) => {
-                error!("❌ Failed to set fan PWM via set_duty: {}", e);
-                
-                // Fallback to individual CPU fan control
-                if let Some(cpu_fan) = self.fan_detector.get_cpu_fan() {
-                    info!("🔄 Fallback: Applying direct PWM control to CPU fan {} -> PWM {}", 
-                          cpu_fan.fan_number, pwm_value);
-                    match self.fan_detector.set_fan_pwm(cpu_fan.fan_number, pwm_value) {
-                        Ok(()) => {
-                            info!("✅ Fallback successful: CPU fan {} PWM set to {}", cpu_fan.fan_number, pwm_value);
-                        }
-                        Err(fallback_e) => {
-                            error!("❌ Fallback failed: Could not set CPU fan PWM directly: {}", fallback_e);
-                        }
-                    }
-                } else {
-                    error!("❌ No CPU fan found for direct PWM control fallback");
-                }
-            }
-        }
-        
-        Ok(())
+
+        self.apply_duty(duty)
     }
 
     /// Read CPU usage from /proc/stat
