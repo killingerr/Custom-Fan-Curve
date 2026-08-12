@@ -381,6 +381,12 @@ mod tests {
 
     #[test]
     fn test_persistence_functionality() {
+        // Use a temp config dir so CI (fresh HOME) doesn't depend on ~/.fan_curve_app
+        let dir =
+            std::env::temp_dir().join(format!("fan_curve_persist_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let config_path = dir.join("config.json");
+
         // Create a test configuration
         let mut config = FanCurveConfig::new();
 
@@ -396,7 +402,6 @@ mod tests {
         config.default_curve_index = Some(config.curves.len() - 1); // Set custom as default
 
         // Test save and load
-        let config_path = FanCurveConfig::get_config_path();
         config
             .save_to_file(&config_path)
             .expect("Failed to save config");
@@ -416,13 +421,15 @@ mod tests {
         assert_eq!(loaded_custom.name(), "Custom Test");
         assert_eq!(loaded_custom.points().len(), 5);
 
-        // Test persistence validation
-        config
-            .validate_persistence()
-            .expect("Persistence validation failed");
+        // Round-trip through for_persistence (what save_to_file writes)
+        let expected = config.for_persistence();
+        let reloaded =
+            FanCurveConfig::load_from_file(&config_path).expect("Failed to reload config");
+        assert_eq!(reloaded.curves.len(), expected.curves.len());
+        assert_eq!(reloaded.default_curve_index, expected.default_curve_index);
 
         // Clean up test file
-        let _ = std::fs::remove_file(&config_path);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
