@@ -195,9 +195,21 @@ impl FanCurveApp {
 
     /// Auto-save configuration with error handling
     fn auto_save_config(&mut self) {
+        let editing_builtin = self.fan_curves[self.current_curve_index].is_builtin();
+
         if let Err(e) = self.save_config() {
             eprintln!("Auto-save failed: {}", e);
             self.set_status(format!("Auto-save failed: {}", e));
+            return;
+        }
+
+        if editing_builtin {
+            self.set_status(
+                "Built-in profile changes are temporary. Use Save as New Profile to keep them."
+                    .to_string(),
+            );
+            // Still push so Apply/session control can use the in-memory edits.
+            let _ = self.push_config_to_daemon();
             return;
         }
 
@@ -304,6 +316,12 @@ impl eframe::App for FanCurveApp {
             // Current fan profile display
             let current_profile = self.fan_curves[self.current_curve_index].name();
             ui.label(format!("Current Profile: {}", current_profile));
+            if self.fan_curves[self.current_curve_index].is_builtin() {
+                ui.colored_label(
+                    egui::Color32::from_rgb(180, 140, 40),
+                    "Built-in profile: edits apply for this session only. Save as New Profile to keep them.",
+                );
+            }
 
                     // Fan curve selection
                     egui::ComboBox::from_label("Select Fan Curve")
@@ -457,13 +475,27 @@ impl eframe::App for FanCurveApp {
                 if should_close {
                     self.show_save_dialog = false;
                     if should_save && !self.new_curve_name.is_empty() {
-                        let mut new_curve = self.fan_curves[self.current_curve_index].clone();
-                        new_curve.set_name(self.new_curve_name.clone());
-                        self.fan_curves.push(new_curve);
-                        self.new_curve_name.clear();
-                        self.set_status("Profile saved!".to_string());
-                        // Auto-save after creating new profile
-                        self.auto_save_config();
+                        let name = self.new_curve_name.trim().to_string();
+                        if FanCurve::is_builtin_name(&name) {
+                            self.set_status(format!(
+                                "'{}' is a built-in profile name. Choose a different name.",
+                                name
+                            ));
+                            self.new_curve_name.clear();
+                        } else if self.fan_curves.iter().any(|c| c.name() == name) {
+                            self.set_status(format!(
+                                "A profile named '{}' already exists. Choose a different name.",
+                                name
+                            ));
+                            self.new_curve_name.clear();
+                        } else {
+                            let mut new_curve = self.fan_curves[self.current_curve_index].clone();
+                            new_curve.set_name(name);
+                            self.fan_curves.push(new_curve);
+                            self.new_curve_name.clear();
+                            self.set_status("Profile saved!".to_string());
+                            self.auto_save_config();
+                        }
                     } else {
                         self.new_curve_name.clear();
                     }

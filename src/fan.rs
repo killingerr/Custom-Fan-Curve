@@ -40,6 +40,27 @@ impl FanCurve {
         &self.name
     }
 
+    /// Built-in profiles shipped with the app; they can be edited in-session
+    /// but are never overwritten on disk.
+    pub fn is_builtin_name(name: &str) -> bool {
+        matches!(name, "Standard" | "Threadripper 2" | "HEDT" | "Xeon")
+    }
+
+    pub fn is_builtin(&self) -> bool {
+        Self::is_builtin_name(&self.name)
+    }
+
+    /// Factory definition for a built-in profile name, if any.
+    pub fn factory_by_name(name: &str) -> Option<Self> {
+        match name {
+            "Standard" => Some(Self::standard()),
+            "Threadripper 2" => Some(Self::threadripper2()),
+            "HEDT" => Some(Self::hedt()),
+            "Xeon" => Some(Self::xeon()),
+            _ => None,
+        }
+    }
+
     pub fn set_name(&mut self, name: String) {
         self.name = name;
     }
@@ -223,7 +244,8 @@ impl FanCurveConfig {
     }
 
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
-        let json = serde_json::to_string_pretty(self)?;
+        // Never persist edits over built-in profiles; custom curves save as-is.
+        let json = serde_json::to_string_pretty(&self.for_persistence())?;
         fs::write(path, json)?;
         Ok(())
     }
@@ -246,9 +268,23 @@ impl FanCurveConfig {
             .join("config.json")
     }
 
+    /// Config as written to disk: built-in curves reset to factory definitions.
+    pub fn for_persistence(&self) -> Self {
+        let curves = self
+            .curves
+            .iter()
+            .map(|c| FanCurve::factory_by_name(c.name()).unwrap_or_else(|| c.clone()))
+            .collect();
+        Self {
+            curves,
+            default_curve_index: self.default_curve_index,
+        }
+    }
+
     /// Validate that the configuration is properly saved and can be loaded
     pub fn validate_persistence(&self) -> Result<()> {
         let config_path = Self::get_config_path();
+        let expected = self.for_persistence();
 
         // Save the current config
         self.save_to_file(&config_path)?;
@@ -256,14 +292,14 @@ impl FanCurveConfig {
         // Try to load it back
         let loaded_config = Self::load_from_file(&config_path)?;
 
-        // Validate that the loaded config matches the current config
-        if loaded_config.curves.len() != self.curves.len() {
+        // Validate that the loaded config matches what persistence writes
+        if loaded_config.curves.len() != expected.curves.len() {
             return Err(crate::errors::FanCurveError::Config(
                 "Curve count mismatch after save/load".to_string(),
             ));
         }
 
-        for (i, (original, loaded)) in self
+        for (i, (original, loaded)) in expected
             .curves
             .iter()
             .zip(loaded_config.curves.iter())
@@ -298,7 +334,7 @@ impl FanCurveConfig {
             }
         }
 
-        if self.default_curve_index != loaded_config.default_curve_index {
+        if expected.default_curve_index != loaded_config.default_curve_index {
             return Err(crate::errors::FanCurveError::Config(
                 "Default curve index mismatch after save/load".to_string(),
             ));
@@ -432,5 +468,52 @@ mod tests {
         // So it should still be 100%
         assert_eq!(duty_51, 10000, "Duty should be 10000 for 100% at 51°C");
         assert_eq!(pwm_51, 255, "PWM should be 255 for 100% duty at 51°C");
+    }
+
+    #[test]
+    fn test_builtin_profiles_not_overwritten_on_save() {
+        let dir =
+            std::env::temp_dir().join(format!("fan_curve_builtin_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("config.json");
+
+        let mut config = FanCurveConfig::new();
+        // Mutate the built-in Standard curve in memory
+        config.curves[0].add_point(42, 1234);
+        // Add a custom curve that should persist
+        let mut custom = FanCurve::new("My Custom".to_string());
+        custom.add_point(0, 0);
+        custom.add_point(50, 5000);
+        config.curves.push(custom);
+
+        let to_save = config.for_persistence();
+        let json = serde_json::to_string_pretty(&to_save).expect("serialize");
+        std::fs::write(&path, json).expect("write");
+        let loaded: FanCurveConfig =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).expect("parse");
+
+        let standard = loaded
+            .curves
+            .iter()
+            .find(|c| c.name() == "Standard")
+            .expect("Standard present");
+        assert_eq!(
+            standard.points().len(),
+            FanCurve::standard().points().len(),
+            "built-in Standard must not keep in-memory edits"
+        );
+        assert!(!standard
+            .points()
+            .iter()
+            .any(|p| p.temp == 42 && p.duty == 1234));
+
+        let custom = loaded
+            .curves
+            .iter()
+            .find(|c| c.name() == "My Custom")
+            .expect("custom present");
+        assert_eq!(custom.points().len(), 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
