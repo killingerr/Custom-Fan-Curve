@@ -151,64 +151,76 @@ impl FanCurve {
         self.calculate_duty_for_temperature(temp_thousandths)
     }
 
+    // Built-in curves mirror system76-power's FanCurve definitions (src/fan.rs
+    // there). Points here are whole degrees; system76-power uses hundredths,
+    // so fractional temperatures are rounded down to ramp no later than it does.
+
     pub fn standard() -> Self {
         let mut curve = Self::new("Standard".to_string());
-        curve.add_point(0, 0);
-        curve.add_point(30, 2000); // 20% = 2000/10000
-        curve.add_point(40, 3000); // 30% = 3000/10000
-        curve.add_point(50, 4000); // 40% = 4000/10000
-        curve.add_point(60, 5000); // 50% = 5000/10000
-        curve.add_point(70, 6000); // 60% = 6000/10000
-        curve.add_point(80, 7000); // 70% = 7000/10000
-        curve.add_point(90, 8000); // 80% = 8000/10000
-        curve.add_point(100, 10000); // 100% = 10000/10000
+        curve.add_point(44, 0); // system76-power: 44.99°C
+        curve.add_point(45, 3000);
+        curve.add_point(55, 3500);
+        curve.add_point(65, 4000);
+        curve.add_point(75, 5000);
+        curve.add_point(78, 6000);
+        curve.add_point(81, 7000);
+        curve.add_point(84, 8000);
+        curve.add_point(86, 9000);
+        curve.add_point(88, 10000);
         curve
     }
 
     pub fn threadripper2() -> Self {
         let mut curve = Self::new("Threadripper 2".to_string());
-        curve.add_point(0, 0);
-        curve.add_point(25, 1000); // 10% = 1000/10000
-        curve.add_point(35, 2000); // 20% = 2000/10000
-        curve.add_point(45, 3000); // 30% = 3000/10000
-        curve.add_point(55, 4000); // 40% = 4000/10000
-        curve.add_point(65, 5000); // 50% = 5000/10000
-        curve.add_point(75, 6000); // 60% = 6000/10000
-        curve.add_point(85, 7000); // 70% = 7000/10000
-        curve.add_point(95, 8000); // 80% = 8000/10000
-        curve.add_point(100, 10000); // 100% = 10000/10000
+        curve.add_point(0, 3000);
+        curve.add_point(40, 4000);
+        curve.add_point(47, 5000); // system76-power: 47.5°C
+        curve.add_point(55, 6500);
+        curve.add_point(62, 8500); // system76-power: 62.5°C
+        curve.add_point(66, 10000); // system76-power: 66.25°C
         curve
     }
 
     pub fn hedt() -> Self {
         let mut curve = Self::new("HEDT".to_string());
-        curve.add_point(0, 0);
-        curve.add_point(20, 1500); // 15% = 1500/10000
-        curve.add_point(30, 2500); // 25% = 2500/10000
-        curve.add_point(40, 3500); // 35% = 3500/10000
-        curve.add_point(50, 4500); // 45% = 4500/10000
-        curve.add_point(60, 5500); // 55% = 5500/10000
-        curve.add_point(70, 6500); // 65% = 6500/10000
-        curve.add_point(80, 7500); // 75% = 7500/10000
-        curve.add_point(90, 8500); // 85% = 8500/10000
-        curve.add_point(100, 10000); // 100% = 10000/10000
+        curve.add_point(0, 3000);
+        curve.add_point(50, 3500);
+        curve.add_point(60, 4500);
+        curve.add_point(70, 5500);
+        curve.add_point(74, 6000);
+        curve.add_point(76, 7000);
+        curve.add_point(78, 8000);
+        curve.add_point(81, 10000);
         curve
     }
 
     pub fn xeon() -> Self {
         let mut curve = Self::new("Xeon".to_string());
-        curve.add_point(0, 0);
-        curve.add_point(15, 500); // 5% = 500/10000
-        curve.add_point(25, 1500); // 15% = 1500/10000
-        curve.add_point(35, 2500); // 25% = 2500/10000
-        curve.add_point(45, 3500); // 35% = 3500/10000
-        curve.add_point(55, 4500); // 45% = 4500/10000
-        curve.add_point(65, 5500); // 55% = 5500/10000
-        curve.add_point(75, 6500); // 65% = 6500/10000
-        curve.add_point(85, 7500); // 75% = 7500/10000
-        curve.add_point(95, 8500); // 85% = 8500/10000
-        curve.add_point(100, 10000); // 100% = 10000/10000
+        curve.add_point(0, 4000);
+        curve.add_point(50, 4000);
+        curve.add_point(55, 4500);
+        curve.add_point(60, 5000);
+        curve.add_point(65, 5500);
+        curve.add_point(70, 6000);
+        curve.add_point(72, 6500);
+        curve.add_point(74, 8000);
+        curve.add_point(76, 8500);
+        curve.add_point(77, 9000);
+        curve.add_point(78, 10000);
         curve
+    }
+
+    /// Built-in curve system76-power uses for a DMI product_version, matching
+    /// its FanDaemon::new model table.
+    pub fn builtin_name_for_model(model: &str) -> &'static str {
+        match model.trim() {
+            "thelio-major-r1" => "Threadripper 2",
+            "thelio-astra-a1" | "thelio-astra-a1.1" | "thelio-major-r2" | "thelio-major-r2.1"
+            | "thelio-major-b1" | "thelio-major-b2" | "thelio-major-b3" | "thelio-mega-r1"
+            | "thelio-mega-r1.1" => "HEDT",
+            "thelio-massive-b1" => "Xeon",
+            _ => "Standard",
+        }
     }
 
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
@@ -232,14 +244,24 @@ pub struct FanCurveConfig {
 
 impl FanCurveConfig {
     pub fn new() -> Self {
+        let model = fs::read_to_string("/sys/class/dmi/id/product_version").unwrap_or_default();
+        Self::new_for_model(&model)
+    }
+
+    /// Default config with the built-in curve system76-power would use on
+    /// `model` (a DMI product_version) selected as the default.
+    pub fn new_for_model(model: &str) -> Self {
+        let curves = vec![
+            FanCurve::standard(),
+            FanCurve::threadripper2(),
+            FanCurve::hedt(),
+            FanCurve::xeon(),
+        ];
+        let default_name = FanCurve::builtin_name_for_model(model);
+        let default_curve_index = curves.iter().position(|c| c.name() == default_name);
         Self {
-            curves: vec![
-                FanCurve::standard(),
-                FanCurve::threadripper2(),
-                FanCurve::hedt(),
-                FanCurve::xeon(),
-            ],
-            default_curve_index: Some(0),
+            curves,
+            default_curve_index,
         }
     }
 
@@ -253,7 +275,9 @@ impl FanCurveConfig {
     pub fn load_from_file(path: &Path) -> Result<Self> {
         let json = fs::read_to_string(path)?;
         let config: FanCurveConfig = serde_json::from_str(&json)?;
-        Ok(config)
+        // Built-ins always load as their factory definitions, so configs
+        // written by older versions pick up updated built-in curves.
+        Ok(config.for_persistence())
     }
 
     pub fn get_config_path() -> std::path::PathBuf {
@@ -359,24 +383,65 @@ mod tests {
         let curve = FanCurve::standard();
 
         // Test exact points (using thousandths of Celsius)
-        assert_eq!(curve.calculate_duty_for_temperature(0), 0);
-        assert_eq!(curve.calculate_duty_for_temperature(30000), 2000); // 30°C = 20%
-        assert_eq!(curve.calculate_duty_for_temperature(70000), 6000); // 70°C = 60%
-        assert_eq!(curve.calculate_duty_for_temperature(100000), 10000); // 100°C = 100%
+        assert_eq!(curve.calculate_duty_for_temperature(44000), 0); // 44°C = 0%
+        assert_eq!(curve.calculate_duty_for_temperature(45000), 3000); // 45°C = 30%
+        assert_eq!(curve.calculate_duty_for_temperature(75000), 5000); // 75°C = 50%
+        assert_eq!(curve.calculate_duty_for_temperature(88000), 10000); // 88°C = 100%
 
         // Test interpolation between points
-        assert_eq!(curve.calculate_duty_for_temperature(35000), 2500); // Between 30°C(20%) and 40°C(30%)
-        assert_eq!(curve.calculate_duty_for_temperature(65000), 5500); // Between 60°C(50%) and 70°C(60%)
+        assert_eq!(curve.calculate_duty_for_temperature(50000), 3250); // Between 45°C(30%) and 55°C(35%)
+        assert_eq!(curve.calculate_duty_for_temperature(70000), 4500); // Between 65°C(40%) and 75°C(50%)
 
         // Test edge cases
-        assert_eq!(curve.calculate_duty_for_temperature(0), 0); // Below minimum (0°C)
+        assert_eq!(curve.calculate_duty_for_temperature(0), 0); // Below minimum
+        assert_eq!(curve.calculate_duty_for_temperature(44900), 0); // Just below the 45°C step
         assert_eq!(curve.calculate_duty_for_temperature(150000), 10000); // Above maximum (150°C)
 
         // Test backward compatibility with Celsius
         assert_eq!(curve.calculate_duty_for_temperature_celsius(0.0), 0);
-        assert_eq!(curve.calculate_duty_for_temperature_celsius(30.0), 2000);
-        assert_eq!(curve.calculate_duty_for_temperature_celsius(70.0), 6000);
-        assert_eq!(curve.calculate_duty_for_temperature_celsius(100.0), 10000);
+        assert_eq!(curve.calculate_duty_for_temperature_celsius(45.0), 3000);
+        assert_eq!(curve.calculate_duty_for_temperature_celsius(75.0), 5000);
+        assert_eq!(curve.calculate_duty_for_temperature_celsius(88.0), 10000);
+    }
+
+    #[test]
+    fn test_default_curve_follows_model() {
+        let default_name = |model: &str| {
+            let config = FanCurveConfig::new_for_model(model);
+            config.curves[config.default_curve_index.unwrap()]
+                .name()
+                .to_string()
+        };
+        assert_eq!(default_name("thelio-major-r1\n"), "Threadripper 2");
+        assert_eq!(default_name("thelio-major-r2.1"), "HEDT");
+        assert_eq!(default_name("thelio-mega-r1"), "HEDT");
+        assert_eq!(default_name("thelio-massive-b1"), "Xeon");
+        assert_eq!(default_name("thelio-mira-r5"), "Standard");
+        assert_eq!(default_name(""), "Standard");
+    }
+
+    #[test]
+    fn test_load_resets_builtins_to_factory() {
+        let dir = std::env::temp_dir().join(format!("fan_curve_load_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("config.json");
+
+        // A config written by an older version with different built-in points
+        let mut old_standard = FanCurve::new("Standard".to_string());
+        old_standard.add_point(30, 2000);
+        let old = FanCurveConfig {
+            curves: vec![old_standard],
+            default_curve_index: Some(0),
+        };
+        std::fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
+
+        let loaded = FanCurveConfig::load_from_file(&path).expect("load");
+        assert_eq!(
+            loaded.curves[0].points().len(),
+            FanCurve::standard().points().len()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
