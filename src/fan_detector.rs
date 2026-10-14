@@ -1,5 +1,5 @@
 use crate::errors::Result;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use std::fs;
 use std::path::Path;
 
@@ -380,8 +380,8 @@ impl FanDetector {
     pub fn set_duty(&self, duty_opt: Option<u8>) -> Result<()> {
         if let Some(duty) = duty_opt {
             let duty_str = format!("{}", duty);
-            info!("Setting all fans to PWM duty: {} (0-255 scale)", duty);
-            info!("Found {} fans to control", self.fans.len());
+            debug!("Setting all fans to PWM duty: {} (0-255 scale)", duty);
+            debug!("Found {} fans to control", self.fans.len());
 
             // Set all available fans to the same duty
             for fan in &self.fans {
@@ -389,9 +389,9 @@ impl FanDetector {
                 let pwm_enable_path =
                     Path::new(&fan.hwmon_path).join(format!("pwm{}_enable", fan.fan_number));
 
-                info!("Processing fan {}: {}", fan.fan_number, fan.fan_label);
-                info!("PWM path: {}", pwm_path.display());
-                info!("Enable path: {}", pwm_enable_path.display());
+                debug!("Processing fan {}: {}", fan.fan_number, fan.fan_label);
+                debug!("PWM path: {}", pwm_path.display());
+                debug!("Enable path: {}", pwm_enable_path.display());
 
                 // Check if PWM file exists and is writable
                 if !pwm_path.exists() {
@@ -400,7 +400,7 @@ impl FanDetector {
                 }
 
                 // Enable manual PWM control
-                info!("Enabling manual PWM control for fan {}...", fan.fan_number);
+                debug!("Enabling manual PWM control for fan {}...", fan.fan_number);
                 if let Err(e) = fs::write(&pwm_enable_path, "1") {
                     warn!(
                         "Failed to enable PWM control for fan {} at {}: {}",
@@ -410,11 +410,11 @@ impl FanDetector {
                     );
                     // Continue anyway - some systems don't require enable files
                 } else {
-                    info!("PWM control enabled for fan {}", fan.fan_number);
+                    debug!("PWM control enabled for fan {}", fan.fan_number);
                 }
 
                 // Set PWM duty
-                info!("Setting PWM duty to {} for fan {}...", duty, fan.fan_number);
+                debug!("Setting PWM duty to {} for fan {}...", duty, fan.fan_number);
                 if let Err(e) = fs::write(&pwm_path, &duty_str) {
                     error!(
                         "Failed to set PWM duty for fan {} at {}: {}",
@@ -424,7 +424,7 @@ impl FanDetector {
                     );
                     return Err(crate::errors::FanCurveError::Io(e));
                 } else {
-                    info!(
+                    debug!(
                         "Fan {} PWM successfully set to {} at {}",
                         fan.fan_number,
                         duty,

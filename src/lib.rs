@@ -2,7 +2,9 @@
 //!
 //! A System76 Power-compatible fan curve management application with GUI and DBus interfaces.
 
+pub mod alerts;
 pub mod args;
+pub mod channels;
 pub mod client;
 pub mod cpu_temp;
 pub mod daemon;
@@ -13,6 +15,7 @@ pub mod fan_curve_gui;
 pub mod fan_detector;
 pub mod fan_monitor;
 pub mod logging;
+pub mod overheat;
 pub mod system76_power_client;
 pub mod thelio_io;
 

@@ -1,3 +1,4 @@
+use crate::channels::ChannelAssignment;
 use crate::errors::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -240,6 +241,10 @@ impl FanCurve {
 pub struct FanCurveConfig {
     pub curves: Vec<FanCurve>,
     pub default_curve_index: Option<usize>,
+    /// Per-channel overrides for Thelio Io boards; channels without an
+    /// entry use their default source and the active curve.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<ChannelAssignment>,
 }
 
 impl FanCurveConfig {
@@ -262,6 +267,7 @@ impl FanCurveConfig {
         Self {
             curves,
             default_curve_index,
+            channels: Vec::new(),
         }
     }
 
@@ -302,6 +308,7 @@ impl FanCurveConfig {
         Self {
             curves,
             default_curve_index: self.default_curve_index,
+            channels: self.channels.clone(),
         }
     }
 
@@ -432,6 +439,7 @@ mod tests {
         let old = FanCurveConfig {
             curves: vec![old_standard],
             default_curve_index: Some(0),
+            channels: Vec::new(),
         };
         std::fs::write(&path, serde_json::to_string(&old).unwrap()).unwrap();
 

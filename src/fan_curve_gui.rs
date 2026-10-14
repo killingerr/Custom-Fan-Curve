@@ -138,9 +138,14 @@ impl FanCurveApp {
             })?;
         }
 
+        // The GUI doesn't edit channel assignments yet; keep any in the file.
+        let channels = FanCurveConfig::load_from_file(&config_path)
+            .map(|c| c.channels)
+            .unwrap_or_default();
         let config = FanCurveConfig {
             curves: self.fan_curves.clone(),
             default_curve_index: self.default_curve_index,
+            channels,
         };
 
         // Create a temporary file first, then rename for atomic operation
