@@ -160,83 +160,25 @@ install_application() {
     # Create install directory if it doesn't exist
     sudo mkdir -p "$INSTALL_DIR"
     
-    # Copy binary
-    sudo cp "target/release/$APP_NAME" "$INSTALL_DIR/"
-    sudo chmod +x "$INSTALL_DIR/$APP_NAME"
-    
+    # Copy binary. install(1) replaces the file instead of writing into it, so
+    # this works while the daemon or notification agent is running it.
+    sudo install -m 755 "target/release/$APP_NAME" "$INSTALL_DIR/$APP_NAME"
+
     # Create symlink for easier access
-    if [ ! -L "/usr/local/bin/fan-curve" ]; then
-        sudo ln -s "$INSTALL_DIR/$APP_NAME" "/usr/local/bin/fan-curve"
-    fi
+    sudo ln -sfn "$INSTALL_DIR/$APP_NAME" "/usr/local/bin/fan-curve"
     
     print_success "Application installed to $INSTALL_DIR"
 }
 
 setup_configuration() {
     print_step "Setting up configuration directory..."
-    
-    # Create config directory
+
+    # No default config is written here: when none exists, the daemon and GUI
+    # create one with system76-power's built-in curves (Standard, Threadripper 2,
+    # HEDT, Xeon) and pick the default for this model the way system76-power does.
     mkdir -p "$CONFIG_DIR"
-    
-    # Create default config if it doesn't exist
-    # NOTE: duty values are in ten-thousandths of a percent (10000 = 100%),
-    # matching the system76-power convention used internally by the app.
-    if [ ! -f "$CONFIG_DIR/config.json" ]; then
-        print_status "Creating default configuration..."
-        cat > "$CONFIG_DIR/config.json" << 'EOF'
-{
-  "curves": [
-    {
-      "name": "Standard",
-      "points": [
-        {"temp": 0, "duty": 0},
-        {"temp": 30, "duty": 2000},
-        {"temp": 40, "duty": 3000},
-        {"temp": 50, "duty": 4000},
-        {"temp": 60, "duty": 5000},
-        {"temp": 70, "duty": 6000},
-        {"temp": 80, "duty": 7000},
-        {"temp": 90, "duty": 8000},
-        {"temp": 100, "duty": 10000}
-      ]
-    },
-    {
-      "name": "Quiet",
-      "points": [
-        {"temp": 0, "duty": 0},
-        {"temp": 35, "duty": 1000},
-        {"temp": 45, "duty": 2000},
-        {"temp": 55, "duty": 3000},
-        {"temp": 65, "duty": 4000},
-        {"temp": 75, "duty": 5000},
-        {"temp": 85, "duty": 6000},
-        {"temp": 95, "duty": 7000},
-        {"temp": 100, "duty": 8000}
-      ]
-    },
-    {
-      "name": "Performance",
-      "points": [
-        {"temp": 0, "duty": 0},
-        {"temp": 25, "duty": 2000},
-        {"temp": 35, "duty": 3000},
-        {"temp": 45, "duty": 4000},
-        {"temp": 55, "duty": 5000},
-        {"temp": 65, "duty": 6000},
-        {"temp": 75, "duty": 7000},
-        {"temp": 85, "duty": 8000},
-        {"temp": 95, "duty": 9000},
-        {"temp": 100, "duty": 10000}
-      ]
-    }
-  ],
-  "default_curve_index": 0
-}
-EOF
-        print_success "Default configuration created"
-    else
-        print_status "Configuration already exists, skipping"
-    fi
+
+    print_success "Configuration directory ready"
 }
 
 install_daemon() {
@@ -248,19 +190,42 @@ install_daemon() {
     # Systemd unit
     sudo cp "data/fan-curve-daemon.service" /etc/systemd/system/
 
-    # System-wide config for the daemon (seeded from the user config)
+    # System-wide config for the daemon, seeded from the user config if there
+    # is one; otherwise the daemon creates its own default on first start.
     sudo mkdir -p /etc/fan-curve-app
-    if [ ! -f /etc/fan-curve-app/config.json ]; then
+    if [ ! -f /etc/fan-curve-app/config.json ] && [ -f "$CONFIG_DIR/config.json" ]; then
         sudo cp "$CONFIG_DIR/config.json" /etc/fan-curve-app/config.json
     fi
 
     sudo systemctl daemon-reload
-    sudo systemctl enable --now fan-curve-daemon.service
+    # Pick up a new DBus policy (dbus-broker doesn't watch the directory)
+    sudo systemctl reload dbus 2>/dev/null || true
+    sudo systemctl enable fan-curve-daemon.service
+    # Restart so an update runs the new binary; enable --now leaves an
+    # already running daemon on the old one.
+    sudo systemctl restart fan-curve-daemon.service
 
     if systemctl is-active --quiet fan-curve-daemon.service; then
         print_success "Fan curve daemon is running"
     else
         print_warning "Daemon may not be running. Check with: sudo systemctl status fan-curve-daemon"
+    fi
+}
+
+check_system76_power() {
+    # system76-power only drives the fans on Thelio Io boards, so a version
+    # without ClaimFanControl only conflicts with the daemon there.
+    if ! grep -qsx -e system76_thelio_io -e system76_io /sys/class/hwmon/*/name; then
+        return 0
+    fi
+    if ! busctl status com.system76.PowerDaemon > /dev/null 2>&1; then
+        return 0
+    fi
+    if ! busctl introspect com.system76.PowerDaemon /com/system76/PowerDaemon \
+            com.system76.PowerDaemon 2> /dev/null | grep -q ClaimFanControl; then
+        print_warning "This system76-power can't hand over fan control (no ClaimFanControl)."
+        print_warning "Its fan curve and this app's will both set the fans until it is"
+        print_warning "updated to a version with fan control claim support."
     fi
 }
 
@@ -326,7 +291,7 @@ create_desktop_entry() {
 Version=1.0
 Type=Application
 Name=$APP_DISPLAY_NAME
-Comment=Control CPU fan curves on System76 laptops
+Comment=Control fan curves on System76 computers
 Exec=/usr/local/bin/fan-curve --gui
 Icon=$ICON_PATH
 Terminal=false
@@ -409,11 +374,9 @@ show_usage() {
     echo "  --no-gui         Skip desktop entry creation"
     echo "  --no-deps        Skip dependency installation"
     echo "  --no-icon        Skip icon installation"
-    echo "  --local          Install to local directory instead of system"
     echo ""
     echo "Examples:"
     echo "  $0                    # Full system installation"
-    echo "  $0 --local            # Install to local directory"
     echo "  $0 --no-gui          # Install without desktop entry"
     echo "  $0 --no-deps         # Skip dependency installation"
 }
@@ -434,6 +397,10 @@ show_completion_message() {
     echo "  Status:  sudo systemctl status fan-curve-daemon"
     echo "  Logs:    sudo journalctl -u fan-curve-daemon -f"
     echo "  Config:  /etc/fan-curve-app/config.json"
+    echo ""
+    echo -e "${CYAN}Notifications:${NC}"
+    echo "  A background agent ($APP_NAME notify) starts at login and shows a desktop"
+    echo "  notification if the fans are forced to full speed or your curve isn't running."
     echo ""
     echo -e "${CYAN}Curves:${NC}"
     echo "  On boot the daemon always loads the saved default curve."
@@ -459,7 +426,6 @@ main() {
     local skip_gui=false
     local skip_deps=false
     local skip_icon=false
-    local local_install=false
     
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
@@ -478,11 +444,6 @@ main() {
                 ;;
             --no-icon)
                 skip_icon=true
-                shift
-                ;;
-            --local)
-                local_install=true
-                INSTALL_DIR="$HOME/.local/bin"
                 shift
                 ;;
             *)
@@ -506,6 +467,7 @@ main() {
     install_application
     setup_configuration
     install_daemon
+    check_system76_power
     
     if [ "$skip_icon" = false ]; then
         install_icon

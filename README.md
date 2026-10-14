@@ -54,10 +54,10 @@ The installation script will automatically install all required dependencies.
 fan-curve --gui
 
 # List available fan curves
-fan-curve list
+fan-curve fan-curve list
 
 # Apply a specific curve
-fan-curve apply "Performance"
+fan-curve fan-curve set "Standard"
 
 # Show help
 fan-curve --help
@@ -90,9 +90,15 @@ Configuration files are stored in `~/.fan_curve_app/config.json`. You can edit t
 
 ### Default Curves
 
-- **Standard** - Balanced performance and noise
-- **Quiet** - Lower fan speeds for quieter operation
-- **Performance** - Higher fan speeds for maximum cooling
+The built-in curves are the same as system76-power's, and the default is picked
+by model the same way:
+
+- **Standard** - Most systems
+- **HEDT** - Thelio Major (r2 and later), Mega and Astra
+- **Threadripper 2** - Thelio Major r1
+- **Xeon** - Thelio Massive
+
+Built-in curves can't be overwritten; use "Save as New Profile" to keep changes.
 
 ## Building from Source
 
