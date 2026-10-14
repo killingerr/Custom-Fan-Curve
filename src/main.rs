@@ -34,6 +34,13 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if let Some(fan_curve_app::args::Commands::Notify) = args.command {
+        fan_curve_app::notifier::run()
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        return Ok(());
+    }
+
     // Handle client mode
     let client = FanCurveClient::new()
         .await

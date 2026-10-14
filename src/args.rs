@@ -26,6 +26,9 @@ pub struct Args {
 pub enum Commands {
     /// Run the daemon
     Daemon,
+    /// Show desktop notifications for overheating and fan control problems
+    /// (runs in the user's session; started at login by the installer)
+    Notify,
     /// Fan curve management
     FanCurve {
         #[command(subcommand)]

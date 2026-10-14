@@ -264,6 +264,34 @@ install_daemon() {
     fi
 }
 
+install_notifier() {
+    print_step "Installing desktop notification agent..."
+
+    # The daemon runs as root and can't reach the desktop, so a small agent in
+    # the user's session turns its overheat/fan control signals into notifications.
+    local autostart_dir="$HOME/.config/autostart"
+    mkdir -p "$autostart_dir"
+    cat > "$autostart_dir/fan-curve-app-notify.desktop" << EOF
+[Desktop Entry]
+Type=Application
+Name=$APP_DISPLAY_NAME Notifications
+Comment=Notifies when fans are forced to full speed or the fan curve isn't running
+Exec=$INSTALL_DIR/$APP_NAME notify
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+EOF
+
+    # Restart it now so it runs the new binary without a fresh login
+    pkill -u "$USER" -f "$INSTALL_DIR/$APP_NAME notify" 2>/dev/null || true
+    if [ -n "$DBUS_SESSION_BUS_ADDRESS" ]; then
+        nohup "$INSTALL_DIR/$APP_NAME" notify > /dev/null 2>&1 &
+        print_success "Notification agent running (starts automatically at login)"
+    else
+        print_success "Notification agent will start at next login"
+    fi
+}
+
 install_icon() {
     print_step "Installing application icon..."
     
@@ -345,6 +373,10 @@ rm -rf ~/.fan_curve_app
 
 # Remove desktop entry
 rm -f ~/.local/share/applications/fan-curve-app.desktop
+
+# Stop and remove the notification agent
+pkill -u "$USER" -f "bin/fan-curve-app notify" 2>/dev/null || true
+rm -f ~/.config/autostart/fan-curve-app-notify.desktop
 
 # Remove icon
 rm -f ~/.local/share/icons/fan-curve-app.svg
@@ -481,6 +513,7 @@ main() {
     
     if [ "$skip_gui" = false ]; then
         create_desktop_entry
+        install_notifier
     fi
     
     create_uninstall_script

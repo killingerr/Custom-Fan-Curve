@@ -24,6 +24,10 @@ pub struct FanCurveApp {
     edit_point_index: Option<usize>,
     edit_point_temp: String,
     edit_point_duty: String,
+    /// Daemon-reported problems shown as banners: overheat override and fan
+    /// control state, as (summary, body)
+    overheat_alert: Option<crate::alerts::Message>,
+    fan_control_alert: Option<crate::alerts::Message>,
 }
 
 /// Try to connect to the fan curve daemon on the system bus.
@@ -124,6 +128,8 @@ impl FanCurveApp {
             edit_point_temp: String::new(),
             edit_point_duty: String::new(),
             last_applied_curve_index: None,
+            overheat_alert: None,
+            fan_control_alert: None,
         }
     }
 
@@ -246,6 +252,18 @@ impl eframe::App for FanCurveApp {
                     self.last_fan_data_update = std::time::Instant::now();
                     used_daemon_status = true;
                 }
+
+                self.overheat_alert = proxy
+                    .call::<_, _, (bool, f64, String)>("GetOverheat", &())
+                    .ok()
+                    .filter(|(active, _, _)| *active)
+                    .map(|(_, temp, sensor)| crate::alerts::overheat_message(temp, &sensor));
+                self.fan_control_alert = proxy
+                    .call::<_, _, (String, String)>("GetFanControlState", &())
+                    .ok()
+                    .and_then(|(state, detail)| {
+                        crate::alerts::fan_control_message(&state, &detail)
+                    });
             }
 
             if !used_daemon_status {
@@ -314,6 +332,16 @@ impl eframe::App for FanCurveApp {
                     egui::Color32::YELLOW,
                     "Start: sudo ./scripts/install-daemon.sh (or: sudo systemctl start fan-curve-daemon)",
                 );
+            }
+
+            for (alert, color) in [
+                (&self.overheat_alert, egui::Color32::RED),
+                (&self.fan_control_alert, egui::Color32::YELLOW),
+            ] {
+                if let Some((summary, body)) = alert {
+                    ui.colored_label(color, egui::RichText::new(summary).strong());
+                    ui.colored_label(color, body);
+                }
             }
 
             ui.separator();
