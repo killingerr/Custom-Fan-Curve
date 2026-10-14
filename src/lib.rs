@@ -14,6 +14,7 @@ pub mod fan_control;
 pub mod fan_curve_gui;
 pub mod fan_detector;
 pub mod fan_monitor;
+pub mod gpu_info;
 pub mod logging;
 pub mod notifier;
 pub mod overheat;

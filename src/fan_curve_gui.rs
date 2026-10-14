@@ -1,3 +1,4 @@
+use crate::channels::{GpuReading, GpuTemp};
 use crate::errors::Result;
 use crate::fan::{FanCurve, FanCurveConfig};
 use crate::fan_monitor::FanMonitor;
@@ -28,6 +29,17 @@ pub struct FanCurveApp {
     /// control state, as (summary, body)
     overheat_alert: Option<crate::alerts::Message>,
     fan_control_alert: Option<crate::alerts::Message>,
+    /// CPU model name, read once at startup
+    cpu_model: Option<String>,
+    /// GPU model names, read once at startup
+    gpu_models: Vec<crate::gpu_info::GpuInfo>,
+    /// Latest CPU and GPU temperatures for the Live Fan Data section
+    cpu_temp: Option<f32>,
+    gpu_temp: Option<GpuReading>,
+    gpu_usage: Option<GpuReading>,
+    /// Local GPU reader: GPU usage, and temperature when the daemon can't
+    /// report it
+    local_gpu: Option<GpuTemp>,
 }
 
 /// Try to connect to the fan curve daemon on the system bus.
@@ -130,6 +142,12 @@ impl FanCurveApp {
             last_applied_curve_index: None,
             overheat_alert: None,
             fan_control_alert: None,
+            cpu_model: crate::cpu_temp::cpu_model_name(),
+            gpu_models: crate::gpu_info::detect_gpus(),
+            cpu_temp: None,
+            gpu_temp: None,
+            gpu_usage: None,
+            local_gpu: None,
         }
     }
 
@@ -232,6 +250,17 @@ impl FanCurveApp {
     }
 }
 
+/// Colour for a temperature reading in the Live Fan Data section.
+fn temp_color(celsius: f32) -> egui::Color32 {
+    if celsius > 70.0 {
+        egui::Color32::RED
+    } else if celsius > 50.0 {
+        egui::Color32::YELLOW
+    } else {
+        egui::Color32::GREEN
+    }
+}
+
 impl eframe::App for FanCurveApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Always update live fan data every 1s
@@ -247,7 +276,7 @@ impl eframe::App for FanCurveApp {
                         temperature: temp as f32,
                         fan_speeds: speeds,
                         fan_duty: duty,
-                        cpu_usage: 0.0,
+                        cpu_usage: self.fan_monitor.read_cpu_usage().unwrap_or(0.0),
                     });
                     self.last_fan_data_update = std::time::Instant::now();
                     used_daemon_status = true;
@@ -281,6 +310,35 @@ impl eframe::App for FanCurveApp {
                     self.last_fan_data_update = std::time::Instant::now();
                 }
             }
+
+            // Prefer the temperatures the daemon controls the fans with; read
+            // them locally when no daemon (or an older one) can report them.
+            let daemon_temps = self.daemon.as_ref().and_then(|proxy| {
+                proxy
+                    .call::<_, _, (bool, f64, String, f64)>("GetTemperatures", &())
+                    .ok()
+            });
+            match daemon_temps {
+                Some((cpu_ok, cpu, gpu_state, gpu)) => {
+                    self.cpu_temp = cpu_ok.then_some(cpu as f32);
+                    self.gpu_temp = Some(match gpu_state.as_str() {
+                        "ok" => GpuReading::Value(gpu as f32),
+                        "asleep" => GpuReading::Asleep,
+                        _ => GpuReading::Unavailable,
+                    });
+                }
+                None => {
+                    self.cpu_temp = self.current_fan_data.as_ref().map(|d| d.temperature);
+                    self.gpu_temp =
+                        Some(self.local_gpu.get_or_insert_with(GpuTemp::discover).read());
+                }
+            }
+            // Display only, so the GUI reads it itself rather than the daemon.
+            self.gpu_usage = Some(
+                self.local_gpu
+                    .get_or_insert_with(GpuTemp::discover)
+                    .read_usage(),
+            );
         }
 
         // No test mode state to manage
@@ -298,11 +356,13 @@ impl eframe::App for FanCurveApp {
                     ui.label("CPU:");
                     ui.colored_label(
                         match sensor_info.manufacturer {
-                            crate::cpu_temp::CpuManufacturer::Intel => egui::Color32::BLUE,
-                            crate::cpu_temp::CpuManufacturer::Amd => egui::Color32::RED,
+                            crate::cpu_temp::CpuManufacturer::Intel => egui::Color32::from_rgb(110, 170, 255),
+                            crate::cpu_temp::CpuManufacturer::Amd => egui::Color32::from_rgb(255, 110, 110),
                             crate::cpu_temp::CpuManufacturer::Unknown => egui::Color32::GRAY,
                         },
-                        format!("{:?}", sensor_info.manufacturer)
+                        self.cpu_model
+                            .clone()
+                            .unwrap_or_else(|| format!("{:?}", sensor_info.manufacturer))
                     );
                     ui.label("|");
                     ui.label(format!("Sensor: {}", sensor_info.sensor_name));
@@ -310,11 +370,33 @@ impl eframe::App for FanCurveApp {
             } else {
                 ui.horizontal(|ui| {
                     ui.label("CPU:");
-                    ui.colored_label(egui::Color32::GRAY, "Unknown");
+                    ui.colored_label(
+                        egui::Color32::GRAY,
+                        self.cpu_model.as_deref().unwrap_or("Unknown"),
+                    );
                     ui.label("|");
                     ui.colored_label(egui::Color32::YELLOW, "Temperature sensor not detected");
                 });
             }
+
+            ui.horizontal(|ui| {
+                ui.label("GPU:");
+                if self.gpu_models.is_empty() {
+                    ui.colored_label(egui::Color32::GRAY, "None detected");
+                }
+                for (i, gpu) in self.gpu_models.iter().enumerate() {
+                    if i > 0 {
+                        ui.label("|");
+                    }
+                    let color = match gpu.vendor {
+                        crate::gpu_info::GpuVendor::Nvidia => egui::Color32::from_rgb(118, 185, 0),
+                        crate::gpu_info::GpuVendor::Amd => egui::Color32::from_rgb(255, 110, 110),
+                        crate::gpu_info::GpuVendor::Intel => egui::Color32::from_rgb(110, 170, 255),
+                        crate::gpu_info::GpuVendor::Other => egui::Color32::GRAY,
+                    };
+                    ui.colored_label(color, &gpu.name);
+                }
+            });
 
             ui.horizontal(|ui| {
                 ui.label("Daemon:");
@@ -721,17 +803,32 @@ impl eframe::App for FanCurveApp {
                                 // Temperature and Fan Speed
                                 ui.vertical(|ui| {
                                     ui.horizontal(|ui| {
-                                        ui.label("Temperature:");
-                                        ui.colored_label(
-                                            if data.temperature > 70.0 {
-                                                egui::Color32::RED
-                                            } else if data.temperature > 50.0 {
-                                                egui::Color32::YELLOW
-                                            } else {
-                                                egui::Color32::GREEN
-                                            },
-                                            format!("{:.1}°C", data.temperature),
-                                        );
+                                        ui.label("CPU Temp:");
+                                        match self.cpu_temp {
+                                            Some(t) => ui.colored_label(
+                                                temp_color(t),
+                                                format!("{:.1}°C", t),
+                                            ),
+                                            None => {
+                                                ui.colored_label(egui::Color32::GRAY, "Unavailable")
+                                            }
+                                        };
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("GPU Temp:");
+                                        match self.gpu_temp {
+                                            Some(GpuReading::Value(t)) => ui.colored_label(
+                                                temp_color(t),
+                                                format!("{:.1}°C", t),
+                                            ),
+                                            Some(GpuReading::Asleep) => ui.colored_label(
+                                                egui::Color32::GRAY,
+                                                "Off (powered down)",
+                                            ),
+                                            _ => {
+                                                ui.colored_label(egui::Color32::GRAY, "Unavailable")
+                                            }
+                                        };
                                     });
                                     ui.horizontal(|ui| {
                                         ui.label("Fan Speeds:");
@@ -791,6 +888,28 @@ impl eframe::App for FanCurveApp {
                                             },
                                             format!("{:.1}%", data.cpu_usage),
                                         );
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("GPU Usage:");
+                                        match self.gpu_usage {
+                                            Some(GpuReading::Value(u)) => ui.colored_label(
+                                                if u > 80.0 {
+                                                    egui::Color32::RED
+                                                } else if u > 50.0 {
+                                                    egui::Color32::YELLOW
+                                                } else {
+                                                    egui::Color32::GREEN
+                                                },
+                                                format!("{:.0}%", u),
+                                            ),
+                                            Some(GpuReading::Asleep) => ui.colored_label(
+                                                egui::Color32::GRAY,
+                                                "Off (powered down)",
+                                            ),
+                                            _ => {
+                                                ui.colored_label(egui::Color32::GRAY, "Unavailable")
+                                            }
+                                        };
                                     });
                                 });
 

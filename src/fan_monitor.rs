@@ -7,6 +7,7 @@ use futures_util::stream::StreamExt;
 use log::{error, info, warn};
 use rand;
 use std::fs;
+use std::sync::Mutex;
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
 use zbus::{Connection, MatchRule, MessageStream};
@@ -30,6 +31,9 @@ pub struct FanMonitor {
     fan_detector: FanDetector,
     system76_power_client: Option<System76PowerClient>,
     dbus_connection: Option<Connection>,
+    /// Previous /proc/stat CPU times (idle, total), so usage can be measured
+    /// over the interval between readings rather than since boot
+    prev_cpu_times: Mutex<Option<(u64, u64)>>,
 }
 
 impl FanMonitor {
@@ -43,6 +47,7 @@ impl FanMonitor {
             fan_detector: FanDetector::new(),
             system76_power_client: None,
             dbus_connection: None,
+            prev_cpu_times: Mutex::new(None),
         }
     }
 
@@ -481,64 +486,13 @@ impl FanMonitor {
         self.apply_duty(duty)
     }
 
-    /// Read CPU usage from /proc/stat
-    fn read_cpu_usage(&self) -> Result<f32> {
+    /// CPU usage in percent since the previous call (since boot on the first)
+    pub fn read_cpu_usage(&self) -> Result<f32> {
         let stat_content =
             fs::read_to_string("/proc/stat").map_err(crate::errors::FanCurveError::Io)?;
-
-        let first_line = stat_content
-            .lines()
-            .next()
-            .ok_or_else(|| crate::errors::FanCurveError::Config("Empty /proc/stat".to_string()))?;
-
-        let fields: Vec<&str> = first_line.split_whitespace().collect();
-        if fields.len() < 8 {
-            return Err(crate::errors::FanCurveError::Config(
-                "Invalid /proc/stat format".to_string(),
-            ));
-        }
-
-        // Parse CPU times: user, nice, system, idle, iowait, irq, softirq, steal
-        let user: u64 = fields[1].parse().map_err(|_| {
-            crate::errors::FanCurveError::Config("Failed to parse user time".to_string())
-        })?;
-        let nice: u64 = fields[2].parse().map_err(|_| {
-            crate::errors::FanCurveError::Config("Failed to parse nice time".to_string())
-        })?;
-        let system: u64 = fields[3].parse().map_err(|_| {
-            crate::errors::FanCurveError::Config("Failed to parse system time".to_string())
-        })?;
-        let idle: u64 = fields[4].parse().map_err(|_| {
-            crate::errors::FanCurveError::Config("Failed to parse idle time".to_string())
-        })?;
-        let iowait: u64 = fields[5].parse().map_err(|_| {
-            crate::errors::FanCurveError::Config("Failed to parse iowait time".to_string())
-        })?;
-        let irq: u64 = fields[6].parse().map_err(|_| {
-            crate::errors::FanCurveError::Config("Failed to parse irq time".to_string())
-        })?;
-        let softirq: u64 = fields[7].parse().map_err(|_| {
-            crate::errors::FanCurveError::Config("Failed to parse softirq time".to_string())
-        })?;
-        let steal: u64 = if fields.len() > 8 {
-            fields[8].parse().unwrap_or(0)
-        } else {
-            0
-        };
-
-        let total_idle = idle + iowait;
-        let total_non_idle = user + nice + system + irq + softirq + steal;
-        let total = total_idle + total_non_idle;
-
-        // For a single reading, we can't calculate percentage accurately
-        // This is a simplified approach - in practice, you'd want to store previous values
-        // and calculate the difference over time
-        if total == 0 {
-            return Ok(0.0);
-        }
-
-        let cpu_usage = (total_non_idle as f32 / total as f32) * 100.0;
-        Ok(cpu_usage.clamp(0.0, 100.0))
+        let current = parse_cpu_times(&stat_content)?;
+        let previous = self.prev_cpu_times.lock().unwrap().replace(current);
+        Ok(cpu_usage_between(previous.unwrap_or((0, 0)), current))
     }
 
     /// Debug method to show current fan status and PWM values
@@ -675,4 +629,61 @@ pub async fn test_fan_curve(curve_name: &str, duration_seconds: u64) -> Result<(
     println!("\n Fan curve test completed!");
 
     Ok(())
+}
+
+/// Aggregate CPU times from /proc/stat as (idle, total), in clock ticks.
+fn parse_cpu_times(stat_content: &str) -> Result<(u64, u64)> {
+    let first_line = stat_content
+        .lines()
+        .next()
+        .ok_or_else(|| crate::errors::FanCurveError::Config("Empty /proc/stat".to_string()))?;
+
+    // cpu user nice system idle iowait irq softirq steal ...
+    let fields: Vec<u64> = first_line
+        .split_whitespace()
+        .skip(1)
+        .take(8)
+        .map(|f| f.parse())
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|_| {
+            crate::errors::FanCurveError::Config("Invalid /proc/stat format".to_string())
+        })?;
+    if fields.len() < 7 {
+        return Err(crate::errors::FanCurveError::Config(
+            "Invalid /proc/stat format".to_string(),
+        ));
+    }
+
+    let idle = fields[3] + fields[4]; // idle + iowait
+    let total = fields.iter().sum();
+    Ok((idle, total))
+}
+
+/// Percent of time the CPU was busy between two (idle, total) samples.
+fn cpu_usage_between(previous: (u64, u64), current: (u64, u64)) -> f32 {
+    let idle = current.0.saturating_sub(previous.0);
+    let total = current.1.saturating_sub(previous.1);
+    if total == 0 {
+        return 0.0;
+    }
+    ((total - idle.min(total)) as f32 / total as f32 * 100.0).clamp(0.0, 100.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_aggregate_cpu_line() {
+        let stat = "cpu  100 0 50 800 50 0 0 0 0 0\ncpu0 50 0 25 400 25 0 0 0 0 0\n";
+        assert_eq!(parse_cpu_times(stat).unwrap(), (850, 1000));
+    }
+
+    #[test]
+    fn usage_is_measured_between_samples() {
+        // 1000 ticks pass, 250 of them idle -> 75% busy
+        assert_eq!(cpu_usage_between((850, 1000), (1100, 2000)), 75.0);
+        // No time passed
+        assert_eq!(cpu_usage_between((850, 1000), (850, 1000)), 0.0);
+    }
 }

@@ -22,6 +22,21 @@ pub struct CpuTempSensor {
     pub sensor_name: String,
 }
 
+/// CPU model name from /proc/cpuinfo, e.g. "AMD Ryzen 9 7950X 16-Core Processor"
+pub fn cpu_model_name() -> Option<String> {
+    let cpuinfo = fs::read_to_string("/proc/cpuinfo").ok()?;
+    parse_model_name(&cpuinfo)
+}
+
+fn parse_model_name(cpuinfo: &str) -> Option<String> {
+    cpuinfo
+        .lines()
+        .find(|line| line.starts_with("model name"))
+        .and_then(|line| line.split_once(':'))
+        .map(|(_, model)| model.trim().to_string())
+        .filter(|model| !model.is_empty())
+}
+
 /// CPU temperature detector
 pub struct CpuTempDetector {
     sensor: Option<CpuTempSensor>,
@@ -271,6 +286,17 @@ impl Default for CpuTempDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_model_name() {
+        let cpuinfo = "processor\t: 0\nvendor_id\t: AuthenticAMD\n\
+                       model name\t: AMD Ryzen 9 7950X 16-Core Processor\n";
+        assert_eq!(
+            parse_model_name(cpuinfo).as_deref(),
+            Some("AMD Ryzen 9 7950X 16-Core Processor")
+        );
+        assert_eq!(parse_model_name("processor\t: 0\n"), None);
+    }
 
     #[test]
     fn test_cpu_manufacturer_detection() {

@@ -406,6 +406,35 @@ impl GpuTemp {
             None => GpuReading::Unavailable,
         }
     }
+
+    /// Busiest GPU's usage in percent. Intel integrated GPUs don't report
+    /// usage without root-only tools, so they aren't included.
+    pub fn read_usage(&mut self) -> GpuReading {
+        let amd = self
+            .amdgpus
+            .iter()
+            .filter_map(|p| fs::read_to_string(p.join("device/gpu_busy_percent")).ok())
+            .filter_map(|s| s.trim().parse::<f32>().ok());
+
+        let mut asleep = false;
+        let nvidia = if !self.nvidia {
+            Vec::new()
+        } else if self.nvidia_asleep() {
+            asleep = true;
+            Vec::new()
+        } else {
+            nvidia_query("utilization.gpu").unwrap_or_else(|e| {
+                debug!("Failed to read NVIDIA GPU usage: {}", e);
+                Vec::new()
+            })
+        };
+
+        match amd.chain(nvidia).reduce(f32::max) {
+            Some(u) => GpuReading::Value(u),
+            None if asleep => GpuReading::Asleep,
+            None => GpuReading::Unavailable,
+        }
+    }
 }
 
 /// Temperatures in °C of every NVIDIA GPU, via nvidia-smi.
