@@ -43,7 +43,7 @@ check_installation() {
     if [ ! -f "$BINARY_PATH" ]; then
         echo -e "${RED}Error: Fan Curve App is not installed.${NC}"
         echo "Please run the installation script first:"
-        echo "  curl -sSL https://raw.githubusercontent.com/tonysystem76/Fan-Curve-App/main/install.sh | bash"
+        echo "  curl -sSL https://raw.githubusercontent.com/killingerr/Custom-Fan-Curve/main/install.sh | bash"
         exit 1
     fi
 }

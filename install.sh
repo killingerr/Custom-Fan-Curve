@@ -22,7 +22,7 @@ INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="$HOME/.fan_curve_app"
 DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons"
-REPO_URL="https://github.com/tonysystem76/Fan-Curve-App.git"
+REPO_URL="https://github.com/killingerr/Custom-Fan-Curve.git"
 TEMP_DIR="/tmp/fan-curve-app-install"
 # Checkout this script lives in, built by --local
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

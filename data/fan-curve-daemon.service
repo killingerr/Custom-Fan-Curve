@@ -1,6 +1,6 @@
 [Unit]
 Description=Fan Curve Control Daemon
-Documentation=https://github.com/tonysystem76/Fan-Curve-App
+Documentation=https://github.com/killingerr/Custom-Fan-Curve
 After=dbus.service
 
 [Service]

@@ -16,15 +16,15 @@ A modern GUI application for controlling CPU fan curves on System76 laptops, bui
 ### One-Command Install
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/tonysystem76/Fan-Curve-App/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/killingerr/Custom-Fan-Curve/main/install.sh | bash
 ```
 
 ### Manual Installation
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/tonysystem76/Fan-Curve-App.git
-   cd Fan-Curve-App
+   git clone https://github.com/killingerr/Custom-Fan-Curve.git
+   cd Custom-Fan-Curve
    ```
 
 2. **Run the installation script:**
@@ -113,8 +113,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
 
 # Clone and build
-git clone https://github.com/tonysystem76/Fan-Curve-App.git
-cd Fan-Curve-App
+git clone https://github.com/killingerr/Custom-Fan-Curve.git
+cd Custom-Fan-Curve
 cargo build --release
 
 # Run
@@ -164,4 +164,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Support
 
-For issues and questions, please open an issue on the [GitHub repository](https://github.com/tonysystem76/Fan-Curve-App/issues).
+For issues and questions, please open an issue on the [GitHub repository](https://github.com/killingerr/Custom-Fan-Curve/issues).
