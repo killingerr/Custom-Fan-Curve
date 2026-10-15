@@ -208,6 +208,10 @@ impl FanCurveDaemon {
     }
 }
 
+/// Error for attempts to change a built-in profile.
+const BUILTIN_READ_ONLY: &str =
+    "Built-in profiles are read-only; save a copy as a new profile to change it";
+
 /// How often the daemon re-sends ClaimFanControl, in control loop ticks.
 /// Re-claiming picks the claim back up after system76-power restarts (it
 /// forgets claims), after another claimant releases, or once system76-power
@@ -835,6 +839,9 @@ impl FanCurveDaemon {
             let current_index = self.current_curve_index.lock().unwrap();
 
             if *current_index < config.curves.len() {
+                if config.curves[*current_index].is_builtin() {
+                    return Err(zbus_error_from_display(BUILTIN_READ_ONLY));
+                }
                 config.curves[*current_index].add_point(temp, duty * 100);
                 true
             } else {
@@ -876,6 +883,9 @@ impl FanCurveDaemon {
             let current_index = self.current_curve_index.lock().unwrap();
 
             if *current_index < config.curves.len() {
+                if config.curves[*current_index].is_builtin() {
+                    return Err(zbus_error_from_display(BUILTIN_READ_ONLY));
+                }
                 config.curves[*current_index].remove_last_point().is_some()
             } else {
                 return Err(zbus_error_from_display("Invalid current fan curve index"));
@@ -933,6 +943,12 @@ impl FanCurveDaemon {
         if curves.is_empty() {
             return Err(zbus_error_from_display("Cannot set an empty curve list"));
         }
+        // Built-in profiles are read-only: whatever a client sends for them,
+        // they keep their factory definitions.
+        let curves: Vec<FanCurve> = curves
+            .into_iter()
+            .map(|c| FanCurve::factory_by_name(c.name()).unwrap_or(c))
+            .collect();
 
         let current_pos = curves
             .iter()
