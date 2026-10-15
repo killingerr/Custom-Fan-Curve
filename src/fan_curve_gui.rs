@@ -1,6 +1,6 @@
-use crate::channels::{GpuReading, GpuTemp};
+use crate::channels::{GpuReading, GpuTemp, TempSource};
 use crate::errors::Result;
-use crate::fan::{FanCurve, FanCurveConfig};
+use crate::fan::{FanChannelCurve, FanCurve, FanCurveConfig, FanPoint};
 use crate::fan_monitor::FanMonitor;
 use eframe::egui;
 
@@ -40,6 +40,79 @@ pub struct FanCurveApp {
     /// Local GPU reader: GPU usage, and temperature when the daemon can't
     /// report it
     local_gpu: Option<GpuTemp>,
+    /// Thelio Io fan channels the daemon drives; empty without a board
+    fans: Vec<FanSetting>,
+    /// Index into `fans` of the tab shown for an independent profile
+    selected_fan: usize,
+    /// Curve the open add/edit point dialog changes
+    point_target: PointTarget,
+}
+
+/// One Thelio Io fan channel as shown in the GUI.
+struct FanSetting {
+    number: u8,
+    label: String,
+    /// Temperature the fan follows when the profile isn't independent
+    synced_source: TempSource,
+    /// Current duty (0-10000) reported by the daemon
+    duty: u16,
+}
+
+/// Curve a point edit applies to.
+#[derive(Clone, Copy, PartialEq)]
+enum PointTarget {
+    /// The selected profile's points
+    Profile,
+    /// The selected profile's own curve for a fan channel
+    Fan(u8),
+}
+
+/// What the user clicked in a list of curve points.
+enum PointAction {
+    Edit(usize),
+    Remove(usize),
+}
+
+/// Fan channels from the daemon, or None if it can't report them.
+fn fetch_channels(proxy: &zbus::blocking::Proxy<'static>) -> Option<Vec<FanSetting>> {
+    let channels = proxy
+        .call::<_, _, Vec<(u8, String, TempSource, TempSource, u16)>>("GetChannels", &())
+        .ok()?;
+    Some(
+        channels
+            .into_iter()
+            .map(|(number, label, _source, synced_source, duty)| FanSetting {
+                number,
+                label,
+                synced_source,
+                duty,
+            })
+            .collect(),
+    )
+}
+
+/// List `points` with Edit and Remove buttons.
+fn show_points(ui: &mut egui::Ui, points: &[FanPoint]) -> Option<PointAction> {
+    let mut action = None;
+    for (i, point) in points.iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(format!("Point {}: ", i + 1));
+            ui.label(format!("{}°C -> {}%", point.temp, point.duty_percent()));
+
+            ui.add_space(10.0);
+
+            if ui.button("Edit").clicked() {
+                action = Some(PointAction::Edit(i));
+            }
+
+            ui.add_space(5.0);
+
+            if ui.button("Remove").clicked() {
+                action = Some(PointAction::Remove(i));
+            }
+        });
+    }
+    action
 }
 
 /// Try to connect to the fan curve daemon on the system bus.
@@ -115,6 +188,8 @@ impl FanCurveApp {
             eprintln!("Falling back to simulation mode");
         }
 
+        let fans = daemon.as_ref().and_then(fetch_channels).unwrap_or_default();
+
         if daemon.is_some() {
             println!("Connected to fan curve daemon; daemon controls the fans");
         } else {
@@ -148,6 +223,9 @@ impl FanCurveApp {
             gpu_temp: None,
             gpu_usage: None,
             local_gpu: None,
+            fans,
+            selected_fan: 0,
+            point_target: PointTarget::Profile,
         }
     }
 
@@ -162,7 +240,7 @@ impl FanCurveApp {
             })?;
         }
 
-        // The GUI doesn't edit channel assignments yet; keep any in the file.
+        // Channel settings live in the daemon's config; keep any in this file.
         let channels = FanCurveConfig::load_from_file(&config_path)
             .map(|c| c.channels)
             .unwrap_or_default();
@@ -222,6 +300,338 @@ impl FanCurveApp {
         Ok(true)
     }
 
+    /// Send the temperature each fan follows in synced profiles to the
+    /// daemon, which saves them.
+    fn push_channels_to_daemon(&mut self) {
+        let Some(ref proxy) = self.daemon else {
+            self.set_status("Daemon not running — fan settings can't be applied.".to_string());
+            return;
+        };
+        let channels: Vec<(u8, TempSource)> = self
+            .fans
+            .iter()
+            .map(|f| (f.number, f.synced_source))
+            .collect();
+        match proxy.call::<_, _, ()>("SetChannels", &(channels,)) {
+            Ok(()) => self.set_status("Fan temperature sources saved".to_string()),
+            Err(e) => self.set_status(format!("Daemon rejected fan settings: {}", e)),
+        }
+    }
+
+    fn current_profile(&self) -> &FanCurve {
+        &self.fan_curves[self.current_curve_index]
+    }
+
+    /// The selected profile drives each fan with its own curve.
+    fn profile_is_independent(&self) -> bool {
+        !self.fans.is_empty() && self.current_profile().is_independent()
+    }
+
+    /// Switch the selected profile between every fan following its points and
+    /// each fan following its own curve. Fans without a curve yet start from
+    /// the profile's points and the temperature they follow when synced.
+    fn set_independent_fans(&mut self, independent: bool) {
+        let profile = &mut self.fan_curves[self.current_curve_index];
+        profile.set_independent(independent);
+        if independent {
+            let points = profile.points().to_vec();
+            for fan in &self.fans {
+                if profile.fan(fan.number).is_none() {
+                    profile.set_fan(FanChannelCurve::new(fan.number, fan.synced_source, &points));
+                }
+            }
+        }
+        self.auto_save_config();
+    }
+
+    /// The selected profile's curve for fan `channel`, created empty if missing.
+    fn fan_curve_mut(&mut self, channel: u8) -> &mut FanChannelCurve {
+        let source = self
+            .fans
+            .iter()
+            .find(|f| f.number == channel)
+            .map_or(TempSource::Hottest, |f| f.synced_source);
+        let profile = &mut self.fan_curves[self.current_curve_index];
+        if profile.fan(channel).is_none() {
+            profile.set_fan(FanChannelCurve::new(channel, source, &[]));
+        }
+        profile.fan_mut(channel).expect("fan curve was just added")
+    }
+
+    fn target_points(&self) -> &[FanPoint] {
+        match self.point_target {
+            PointTarget::Profile => self.current_profile().points(),
+            PointTarget::Fan(channel) => self
+                .current_profile()
+                .fan(channel)
+                .map_or(&[][..], |f| f.points()),
+        }
+    }
+
+    fn add_target_point(&mut self, temp: i16, duty: u16) {
+        match self.point_target {
+            PointTarget::Profile => self.fan_curves[self.current_curve_index].add_point(temp, duty),
+            PointTarget::Fan(channel) => self.fan_curve_mut(channel).add_point(temp, duty),
+        }
+    }
+
+    fn remove_target_point(&mut self, index: usize) -> Option<FanPoint> {
+        match self.point_target {
+            PointTarget::Profile => self.fan_curves[self.current_curve_index].remove_point(index),
+            PointTarget::Fan(channel) => self.fan_curve_mut(channel).remove_point(index),
+        }
+    }
+
+    fn apply_point_action(&mut self, target: PointTarget, action: PointAction) {
+        self.point_target = target;
+        match action {
+            PointAction::Edit(i) => {
+                let point = self.target_points()[i].clone();
+                self.edit_point_temp = point.temp.to_string();
+                self.edit_point_duty = point.duty_percent().to_string();
+                self.edit_point_index = Some(i);
+                self.show_edit_point_dialog = true;
+            }
+            PointAction::Remove(i) => {
+                if let Some(removed) = self.remove_target_point(i) {
+                    self.set_status(format!(
+                        "Removed point {}: {}°C -> {}%",
+                        i + 1,
+                        removed.temp,
+                        removed.duty_percent()
+                    ));
+                    self.auto_save_config();
+                }
+            }
+        }
+    }
+
+    fn open_add_point_dialog(&mut self, target: PointTarget) {
+        self.point_target = target;
+        self.show_add_point_dialog = true;
+        self.new_point_temp = "50".to_string();
+        self.new_point_duty = "50".to_string();
+    }
+
+    /// Profile selection and its points, which every fan follows when synced.
+    fn show_profile_editor(&mut self, ui: &mut egui::Ui) {
+        // Current fan profile display
+        let current_profile = self.fan_curves[self.current_curve_index].name();
+        ui.label(format!("Current Profile: {}", current_profile));
+        if self.fan_curves[self.current_curve_index].is_builtin() {
+            ui.colored_label(
+                egui::Color32::from_rgb(180, 140, 40),
+                "Built-in profile: edits apply for this session only. Save as New Profile to keep them.",
+            );
+        }
+
+        // Fan curve selection
+        egui::ComboBox::from_label("Select Fan Curve")
+            .selected_text(self.fan_curves[self.current_curve_index].name())
+            .show_ui(ui, |ui| {
+                for (index, curve) in self.fan_curves.iter().enumerate() {
+                    let mut text = curve.name().to_string();
+                    if Some(index) == self.default_curve_index {
+                        text += " (Default)";
+                    }
+                    ui.selectable_value(&mut self.current_curve_index, index, text);
+                }
+            });
+
+        if !self.fans.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label("Fans:");
+                let current = self.current_profile().is_independent();
+                let mut independent = current;
+                ui.radio_value(&mut independent, false, "Sync all fans");
+                ui.radio_value(&mut independent, true, "Control each fan independently");
+                if independent != current {
+                    self.set_independent_fans(independent);
+                }
+            });
+        }
+
+        ui.separator();
+        if self.profile_is_independent() {
+            self.show_fan_editor(ui);
+        } else {
+            if self.fans.is_empty() {
+                ui.label("Fan Curve Points:");
+            } else {
+                ui.label("Fan Curve Points (all fans):");
+            }
+
+            if let Some(action) = show_points(ui, self.current_profile().points()) {
+                self.apply_point_action(PointTarget::Profile, action);
+            }
+
+            ui.separator();
+
+            // Add point button
+            if ui.button("Add Point").clicked() {
+                self.open_add_point_dialog(PointTarget::Profile);
+            }
+        }
+
+        ui.separator();
+
+        // Save as new profile button
+        if ui.button("Save as New Profile").clicked() {
+            self.show_save_dialog = true;
+        }
+
+        // Apply button — temporary for this session; reboot returns to default
+        if ui.button("Apply Fan Curve").clicked() {
+            if let Err(e) = self.save_config() {
+                self.set_status(format!("Failed to save: {}", e));
+            } else {
+                let default_name = self
+                    .default_curve_index
+                    .and_then(|i| self.fan_curves.get(i))
+                    .map(|c| c.name().to_string())
+                    .unwrap_or_else(|| "Standard".to_string());
+                let name = self.fan_curves[self.current_curve_index].name().to_string();
+                match self.push_config_to_daemon() {
+                    Ok(true) => {
+                        self.set_status(format!(
+                            "Applied '{}' for this session. Reboot returns to default '{}'.",
+                            name, default_name
+                        ));
+                    }
+                    Ok(false) => {
+                        self.set_status(
+                            "Daemon not running — curve saved but fans are NOT controlled. Run: sudo ./scripts/install-daemon.sh"
+                                .to_string(),
+                        );
+                    }
+                    Err(e) => {
+                        self.set_status(format!(
+                            "Saved locally, but daemon rejected config: {}",
+                            e
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Set as default — persists across reboots via the daemon config
+        if ui.button("Set as Default").clicked() {
+            self.default_curve_index = Some(self.current_curve_index);
+            let name = self.fan_curves[self.current_curve_index].name().to_string();
+            if let Err(e) = self.save_config() {
+                self.set_status(format!("Failed to save: {}", e));
+            } else {
+                match self.push_config_to_daemon() {
+                    Ok(true) => self.set_status(format!(
+                        "'{}' is now the default and will be used after reboot.",
+                        name
+                    )),
+                    Ok(false) => self.set_status(format!(
+                        "'{}' saved as default locally. Start the daemon so it persists across reboots.",
+                        name
+                    )),
+                    Err(e) => self.set_status(format!(
+                        "Saved locally, but daemon rejected default: {}",
+                        e
+                    )),
+                }
+            }
+        }
+
+        if !self.fans.is_empty() && !self.profile_is_independent() {
+            ui.separator();
+            ui.label("Temperature each fan follows:");
+            self.show_fan_sources(ui);
+        }
+    }
+
+    /// A temperature source picker and current duty for every fan.
+    fn show_fan_sources(&mut self, ui: &mut egui::Ui) {
+        let mut changed = false;
+        for fan in &mut self.fans {
+            ui.horizontal(|ui| {
+                ui.label(format!("{}:", fan.label));
+                changed |= source_picker(ui, ("synced", fan.number), &mut fan.synced_source);
+                ui.label(format!("now {}%", fan.duty / 100));
+            });
+        }
+        if changed {
+            self.push_channels_to_daemon();
+        }
+    }
+
+    /// One tab per fan, each with the selected profile's own temperature
+    /// source and points for it.
+    fn show_fan_editor(&mut self, ui: &mut egui::Ui) {
+        self.selected_fan = self.selected_fan.min(self.fans.len() - 1);
+        ui.horizontal(|ui| {
+            for (i, fan) in self.fans.iter().enumerate() {
+                ui.selectable_value(&mut self.selected_fan, i, &fan.label);
+            }
+        });
+        ui.separator();
+
+        let channel = self.fans[self.selected_fan].number;
+        let label = self.fans[self.selected_fan].label.clone();
+        let duty = self.fans[self.selected_fan].duty;
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label("Follows:");
+            let source = &mut self.fan_curve_mut(channel).source;
+            changed |= source_picker(ui, ("fan", channel), source);
+            ui.label(format!("now {}%", duty / 100));
+        });
+
+        // Replace this fan's points with another profile's curve for it, or
+        // that profile's points when it isn't independent
+        let mut copy_from = None;
+        egui::ComboBox::from_id_salt("copy_profile_to_fan")
+            .selected_text("Copy curve from profile...")
+            .show_ui(ui, |ui| {
+                for (index, curve) in self.fan_curves.iter().enumerate() {
+                    if ui.selectable_label(false, curve.name()).clicked() {
+                        copy_from = Some(index);
+                    }
+                }
+            });
+        if let Some(index) = copy_from {
+            let other = &self.fan_curves[index];
+            let points = match other.fan(channel) {
+                Some(fan) if other.is_independent() && !fan.points().is_empty() => {
+                    fan.points().to_vec()
+                }
+                _ => other.points().to_vec(),
+            };
+            self.fan_curve_mut(channel).set_points(&points);
+            changed = true;
+        }
+        if changed {
+            self.auto_save_config();
+        }
+
+        ui.separator();
+        ui.label(format!("{} Curve Points:", label));
+        let points = self
+            .current_profile()
+            .fan(channel)
+            .map(|f| f.points().to_vec())
+            .unwrap_or_default();
+        if points.is_empty() {
+            ui.colored_label(
+                egui::Color32::GRAY,
+                "No points: this fan follows the profile's all-fans points until you add one.",
+            );
+        }
+        if let Some(action) = show_points(ui, &points) {
+            self.apply_point_action(PointTarget::Fan(channel), action);
+        }
+
+        ui.separator();
+        if ui.button("Add Point").clicked() {
+            self.open_add_point_dialog(PointTarget::Fan(channel));
+        }
+    }
+
     /// Auto-save configuration with error handling
     fn auto_save_config(&mut self) {
         let editing_builtin = self.fan_curves[self.current_curve_index].is_builtin();
@@ -248,6 +658,19 @@ impl FanCurveApp {
             Err(e) => self.set_status(format!("Saved locally, but daemon push failed: {}", e)),
         }
     }
+}
+
+/// Temperature source drop-down; true if the user changed `source`.
+fn source_picker(ui: &mut egui::Ui, id: impl std::hash::Hash, source: &mut TempSource) -> bool {
+    let before = *source;
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(source.label())
+        .show_ui(ui, |ui| {
+            for option in TempSource::ALL {
+                ui.selectable_value(source, option, option.label());
+            }
+        });
+    *source != before
 }
 
 /// Colour for a temperature reading in the Live Fan Data section.
@@ -280,6 +703,20 @@ impl eframe::App for FanCurveApp {
                     });
                     self.last_fan_data_update = std::time::Instant::now();
                     used_daemon_status = true;
+                }
+
+                // Current duties; the full list only when the board first
+                // appears, so a refresh never overwrites settings being edited.
+                if let Some(fans) = fetch_channels(proxy) {
+                    if self.fans.is_empty() {
+                        self.fans = fans;
+                    } else {
+                        for fan in &mut self.fans {
+                            if let Some(latest) = fans.iter().find(|f| f.number == fan.number) {
+                                fan.duty = latest.duty;
+                            }
+                        }
+                    }
                 }
 
                 self.overheat_alert = proxy
@@ -428,142 +865,9 @@ impl eframe::App for FanCurveApp {
 
             ui.separator();
 
-            // Current fan profile display
-            let current_profile = self.fan_curves[self.current_curve_index].name();
-            ui.label(format!("Current Profile: {}", current_profile));
-            if self.fan_curves[self.current_curve_index].is_builtin() {
-                ui.colored_label(
-                    egui::Color32::from_rgb(180, 140, 40),
-                    "Built-in profile: edits apply for this session only. Save as New Profile to keep them.",
-                );
-            }
-
-                    // Fan curve selection
-                    egui::ComboBox::from_label("Select Fan Curve")
-                        .selected_text(self.fan_curves[self.current_curve_index].name())
-                        .show_ui(ui, |ui| {
-                            for (index, curve) in self.fan_curves.iter().enumerate() {
-                                let mut text = curve.name().to_string();
-                                if Some(index) == self.default_curve_index {
-                                    text += " (Default)";
-                                }
-                                ui.selectable_value(&mut self.current_curve_index, index, text);
-                            }
-                        });
-
-            // Display fan curve points
-            ui.separator();
-            ui.label("Fan Curve Points:");
-
-            let mut points_to_remove = Vec::new();
-
-            // First pass: display points and collect indices to remove
-            for (i, point) in self.fan_curves[self.current_curve_index].points().iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.label(format!("Point {}: ", i + 1));
-                    ui.label(format!("{}°C -> {}%", point.temp, point.duty_percent()));
-
-                    ui.add_space(10.0);
-
-                    if ui.button("Edit").clicked() {
-                        self.show_edit_point_dialog = true;
-                        self.edit_point_index = Some(i);
-                        self.edit_point_temp = point.temp.to_string();
-                        self.edit_point_duty = point.duty_percent().to_string();
-                    }
-
-                    ui.add_space(5.0);
-
-                    if ui.button("Remove").clicked() {
-                        points_to_remove.push(i);
-                    }
-                });
-            }
-
-            // Second pass: remove points in reverse order to maintain indices
-            for &index in points_to_remove.iter().rev() {
-                if let Some(removed_point) = self.fan_curves[self.current_curve_index].remove_point(index) {
-                    self.set_status(format!("Removed point {}: {}°C -> {}%",
-                        index + 1,
-                        removed_point.temp,
-                        removed_point.duty_percent()
-                    ));
-                    // Auto-save after removing point
-                    self.auto_save_config();
-                }
-            }
+            self.show_profile_editor(ui);
 
             ui.separator();
-
-            // Add point button
-            if ui.button("Add Point").clicked() {
-                self.show_add_point_dialog = true;
-                self.new_point_temp = "50".to_string();
-                self.new_point_duty = "50".to_string();
-            }
-
-            // Save as new profile button
-            if ui.button("Save as New Profile").clicked() {
-                self.show_save_dialog = true;
-            }
-
-            // Apply button — temporary for this session; reboot returns to default
-            if ui.button("Apply Fan Curve").clicked() {
-                if let Err(e) = self.save_config() {
-                    self.set_status(format!("Failed to save: {}", e));
-                } else {
-                    let default_name = self
-                        .default_curve_index
-                        .and_then(|i| self.fan_curves.get(i))
-                        .map(|c| c.name().to_string())
-                        .unwrap_or_else(|| "Standard".to_string());
-                    let name = self.fan_curves[self.current_curve_index].name().to_string();
-                    match self.push_config_to_daemon() {
-                        Ok(true) => {
-                            self.set_status(format!(
-                                "Applied '{}' for this session. Reboot returns to default '{}'.",
-                                name, default_name
-                            ));
-                        }
-                        Ok(false) => {
-                            self.set_status(
-                                "Daemon not running — curve saved but fans are NOT controlled. Run: sudo ./scripts/install-daemon.sh"
-                                    .to_string(),
-                            );
-                        }
-                        Err(e) => {
-                            self.set_status(format!(
-                                "Saved locally, but daemon rejected config: {}",
-                                e
-                            ));
-                        }
-                    }
-                }
-            }
-
-            // Set as default — persists across reboots via the daemon config
-            if ui.button("Set as Default").clicked() {
-                self.default_curve_index = Some(self.current_curve_index);
-                let name = self.fan_curves[self.current_curve_index].name().to_string();
-                if let Err(e) = self.save_config() {
-                    self.set_status(format!("Failed to save: {}", e));
-                } else {
-                    match self.push_config_to_daemon() {
-                        Ok(true) => self.set_status(format!(
-                            "'{}' is now the default and will be used after reboot.",
-                            name
-                        )),
-                        Ok(false) => self.set_status(format!(
-                            "'{}' saved as default locally. Start the daemon so it persists across reboots.",
-                            name
-                        )),
-                        Err(e) => self.set_status(format!(
-                            "Saved locally, but daemon rejected default: {}",
-                            e
-                        )),
-                    }
-                }
-            }
 
             // Save dialog
             if self.show_save_dialog {
@@ -675,9 +979,8 @@ impl eframe::App for FanCurveApp {
                             self.new_point_duty.parse::<u16>()
                         ) {
                             // Dialog input is percent; store as ten-thousandths (0-10000)
-                            self.fan_curves[self.current_curve_index].add_point(temp, duty * 100);
+                            self.add_target_point(temp, duty * 100);
                             self.set_status(format!("Added point: {}°C -> {}%", temp, duty));
-                            // Auto-save after adding point
                             self.auto_save_config();
                         }
                         self.new_point_temp.clear();
@@ -749,15 +1052,12 @@ impl eframe::App for FanCurveApp {
                             self.edit_point_duty.parse::<u16>()
                         ) {
                             if let Some(index) = self.edit_point_index {
-                                if index < self.fan_curves[self.current_curve_index].points().len() {
-                                    // Remove the old point and add the new one
-                                    // Dialog input is percent; store as ten-thousandths (0-10000)
-                                    if let Some(_old_point) = self.fan_curves[self.current_curve_index].remove_point(index) {
-                                        self.fan_curves[self.current_curve_index].add_point(temp, duty * 100);
-                                        self.set_status(format!("Updated point {}: {}°C -> {}%", index + 1, temp, duty));
-                                        // Auto-save after editing point
-                                        self.auto_save_config();
-                                    }
+                                // Remove the old point and add the new one
+                                // Dialog input is percent; store as ten-thousandths (0-10000)
+                                if self.remove_target_point(index).is_some() {
+                                    self.add_target_point(temp, duty * 100);
+                                    self.set_status(format!("Updated point {}: {}°C -> {}%", index + 1, temp, duty));
+                                    self.auto_save_config();
                                 }
                             }
                         }
@@ -865,16 +1165,37 @@ impl eframe::App for FanCurveApp {
                                 ui.vertical(|ui| {
                                     ui.horizontal(|ui| {
                                         ui.label("Fan Duty:");
-                                        ui.colored_label(
-                                            if data.fan_duty > 8000 {
-                                                egui::Color32::RED
-                                            } else if data.fan_duty > 5000 {
-                                                egui::Color32::YELLOW
+                                        // Each fan's duty when the daemon reports them
+                                        let duties: Vec<(Option<&str>, u16)> =
+                                            if self.fans.is_empty() {
+                                                vec![(None, data.fan_duty)]
                                             } else {
-                                                egui::Color32::GREEN
-                                            },
-                                            format!("{}%", data.fan_duty / 100), // ten-thousandths → %
-                                        );
+                                                self.fans
+                                                    .iter()
+                                                    .map(|f| (Some(f.label.as_str()), f.duty))
+                                                    .collect()
+                                            };
+                                        for (i, (label, duty)) in duties.into_iter().enumerate() {
+                                            if i > 0 {
+                                                ui.label(" | ");
+                                            }
+                                            let percent = duty / 100; // ten-thousandths → %
+                                            ui.colored_label(
+                                                if duty > 8000 {
+                                                    egui::Color32::RED
+                                                } else if duty > 5000 {
+                                                    egui::Color32::YELLOW
+                                                } else {
+                                                    egui::Color32::GREEN
+                                                },
+                                                match label {
+                                                    Some(label) => {
+                                                        format!("{}: {}%", label, percent)
+                                                    }
+                                                    None => format!("{}%", percent),
+                                                },
+                                            );
+                                        }
                                     });
                                     ui.horizontal(|ui| {
                                         ui.label("CPU Usage:");

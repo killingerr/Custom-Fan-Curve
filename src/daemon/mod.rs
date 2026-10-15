@@ -2,7 +2,7 @@
 
 use crate::{
     alerts::fan_control,
-    channels::{GpuReading, GpuTemp, IoBoard},
+    channels::{ChannelAssignment, GpuReading, GpuTemp, IoBoard, TempSource},
     cpu_temp::CpuTempDetector,
     errors::{zbus_error_from_display, FanCurveError, Result},
     fan::{FanCurve, FanCurveConfig},
@@ -37,6 +37,9 @@ pub struct DaemonStatus {
     pub cpu_temp: Option<f32>,
     /// Latest GPU temperature reading
     pub gpu_temp: Option<GpuReading>,
+    /// Thelio Io channels: (channel, label, source followed, source when
+    /// synced, duty 0-10000)
+    pub channels: Vec<(u8, String, TempSource, TempSource, u16)>,
 }
 
 /// Main daemon structure
@@ -560,11 +563,34 @@ fn board_step(
         .map(|&(_, duty, pwm)| (duty, pwm))
         .unwrap_or_default();
 
+    let channels = {
+        let cfg = config.lock().unwrap();
+        let index = *current_curve_index.lock().unwrap();
+        board
+            .channels()
+            .iter()
+            .map(|c| {
+                let duty = written
+                    .iter()
+                    .find(|(n, _, _)| *n == c.number)
+                    .map_or(0, |&(_, duty, _)| duty);
+                (
+                    c.number,
+                    c.label.clone(),
+                    board.source(&cfg, index, c.number),
+                    board.synced_source(&cfg, c.number),
+                    duty,
+                )
+            })
+            .collect()
+    };
+
     let mut st = status.lock().unwrap();
     st.temperature = f64::from(cpu.or(gpu).unwrap_or_default());
     st.duty = duty;
     st.pwm = pwm;
     st.fan_speeds = board.read_speeds();
+    st.channels = channels;
 }
 
 /// One iteration of the control loop on hardware without a Thelio Io board
@@ -981,6 +1007,50 @@ impl FanCurveDaemon {
             gpu_state.to_string(),
             gpu_c,
         )
+    }
+
+    /// Thelio Io fan channels: [(channel, label, source, synced_source,
+    /// duty_0_10000)]. `source` is the temperature the fan follows now;
+    /// `synced_source` the one it follows when the active profile isn't
+    /// independent. Sources are "Cpu", "Gpu" or "Hottest". Empty when no
+    /// Thelio Io board is driven.
+    async fn get_channels(&self) -> Vec<(u8, String, TempSource, TempSource, u16)> {
+        self.status.lock().unwrap().channels.clone()
+    }
+
+    /// Set the temperature each listed channel follows when the active
+    /// profile isn't independent. Unlisted channels are unchanged.
+    async fn set_channels(&self, channels: Vec<(u8, TempSource)>) -> zbus::fdo::Result<()> {
+        if let Some((number, _)) = channels.iter().find(|(n, _)| !(1..=4).contains(n)) {
+            return Err(zbus_error_from_display(format!(
+                "Invalid channel: {}",
+                number
+            )));
+        }
+
+        {
+            let mut config = self.config.lock().unwrap();
+            for (number, source) in channels {
+                match config.channels.iter_mut().find(|a| a.channel == number) {
+                    Some(a) => a.source = source,
+                    None => config.channels.push(ChannelAssignment {
+                        channel: number,
+                        source,
+                        curve: None,
+                    }),
+                }
+            }
+        }
+
+        if let Err(e) = self.ensure_config_saved() {
+            error!("Failed to save config after SetChannels: {}", e);
+            return Err(zbus_error_from_display(format!(
+                "Failed to save config: {}",
+                e
+            )));
+        }
+        info!("Fan channel temperature sources updated");
+        Ok(())
     }
 
     /// Overheat override: (active, hottest_c, sensor)

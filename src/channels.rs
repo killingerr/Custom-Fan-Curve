@@ -5,7 +5,9 @@
 //! pwm1 = CPU Fan, pwm2 = Intake Fan, pwm3 = GPU Fan, pwm4 = Aux Fan.
 //! Each channel can follow its own curve and temperature source.
 
-use crate::fan::{FanCurve, FanCurveConfig};
+use crate::fan::{duty_for_temperature, FanCurveConfig, FanPoint};
+#[cfg(test)]
+use crate::fan::{FanChannelCurve, FanCurve};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -25,12 +27,38 @@ const THELIO_IO_2: &str = "system76_thelio_io";
 const THELIO_IO_1: &str = "system76_io";
 
 /// Temperature that drives a fan channel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, zvariant::Type)]
+#[zvariant(signature = "s")]
 pub enum TempSource {
     Cpu,
     Gpu,
     /// The hotter of the CPU and GPU, as system76-power uses for every fan.
     Hottest,
+}
+
+impl TempSource {
+    pub const ALL: [TempSource; 3] = [TempSource::Cpu, TempSource::Gpu, TempSource::Hottest];
+
+    /// Short name for CLI and logs.
+    pub fn id(self) -> &'static str {
+        match self {
+            TempSource::Cpu => "cpu",
+            TempSource::Gpu => "gpu",
+            TempSource::Hottest => "hottest",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.id() == id)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TempSource::Cpu => "CPU",
+            TempSource::Gpu => "GPU",
+            TempSource::Hottest => "Hottest (CPU or GPU)",
+        }
+    }
 }
 
 /// User override for one PWM channel, stored in the config file.
@@ -80,25 +108,41 @@ fn source_temp(source: TempSource, cpu: Option<f32>, gpu: Option<f32>) -> Option
     }
 }
 
-/// The curve and temperature source a channel follows.
+/// The curve points and temperature source a channel follows. An
+/// independent active profile's own curve for the channel wins; otherwise
+/// the channel follows the config's assignment or its defaults.
 fn resolve(
     config: &FanCurveConfig,
     active_index: usize,
     fixed_wiring: bool,
     channel: u8,
-) -> (TempSource, &FanCurve, Option<&str>) {
+) -> (TempSource, &[FanPoint], Option<&str>) {
     let active = &config.curves[active_index.min(config.curves.len() - 1)];
+    if active.is_independent() {
+        if let Some(fan) = active.fan(channel).filter(|f| !f.points().is_empty()) {
+            return (fan.source, fan.points(), None);
+        }
+    }
     let Some(assignment) = config.channels.iter().find(|a| a.channel == channel) else {
-        return (default_source(fixed_wiring, channel), active, None);
+        return (default_source(fixed_wiring, channel), active.points(), None);
     };
     match assignment.curve.as_deref() {
-        None => (assignment.source, active, None),
+        None => (assignment.source, active.points(), None),
         Some(name) => match config.curves.iter().find(|c| c.name() == name) {
-            Some(curve) => (assignment.source, curve, None),
+            Some(curve) => (assignment.source, curve.points(), None),
             // Missing curve: report the name so the caller can warn about it.
-            None => (assignment.source, active, Some(name)),
+            None => (assignment.source, active.points(), Some(name)),
         },
     }
+}
+
+/// Temperature source `channel` follows when fans aren't independent.
+pub fn synced_source(config: &FanCurveConfig, fixed_wiring: bool, channel: u8) -> TempSource {
+    config
+        .channels
+        .iter()
+        .find(|a| a.channel == channel)
+        .map_or(default_source(fixed_wiring, channel), |a| a.source)
 }
 
 /// Duty (0-10000) for `channel`, or None when no temperature is available.
@@ -113,8 +157,8 @@ pub fn channel_duty(
     if config.curves.is_empty() {
         return None;
     }
-    let (source, curve, _) = resolve(config, active_index, fixed_wiring, channel);
-    source_temp(source, cpu, gpu).map(|t| curve.calculate_duty_for_temperature_celsius(t))
+    let (source, points, _) = resolve(config, active_index, fixed_wiring, channel);
+    source_temp(source, cpu, gpu).map(|t| duty_for_temperature(points, (t * 1000.0) as u32))
 }
 
 /// One PWM channel found on the board.
@@ -184,6 +228,20 @@ impl IoBoard {
 
     pub fn channels(&self) -> &[IoChannel] {
         &self.channels
+    }
+
+    /// Temperature source `channel` follows under `config`, with the curve
+    /// at `active_index` active.
+    pub fn source(&self, config: &FanCurveConfig, active_index: usize, channel: u8) -> TempSource {
+        if config.curves.is_empty() {
+            return default_source(self.fixed_wiring, channel);
+        }
+        resolve(config, active_index, self.fixed_wiring, channel).0
+    }
+
+    /// Temperature source `channel` follows when fans aren't independent.
+    pub fn synced_source(&self, config: &FanCurveConfig, channel: u8) -> TempSource {
+        synced_source(config, self.fixed_wiring, channel)
     }
 
     /// Compute and write every channel's duty, or 100% on every channel when
@@ -575,6 +633,61 @@ mod tests {
             channel_duty(&config, 0, true, 1, Some(45.0), None),
             Some(3000)
         );
+    }
+
+    #[test]
+    fn independent_profile_drives_each_fan_with_its_own_curve() {
+        let mut config = config_with(Vec::new());
+        // Standard is active: 45°C -> 30%
+        config.curves[0].set_fan(FanChannelCurve::new(
+            2,
+            TempSource::Gpu,
+            &[FanPoint::new(0, 8000)],
+        ));
+        // Not independent yet: the intake fan follows the profile's points
+        // and the hotter sensor (90°C -> 100%), not its own curve and source
+        assert_eq!(
+            channel_duty(&config, 0, true, 2, Some(45.0), Some(90.0)),
+            Some(10000)
+        );
+        config.curves[0].set_independent(true);
+        assert_eq!(
+            channel_duty(&config, 0, true, 2, Some(45.0), Some(90.0)),
+            Some(8000)
+        );
+        // A fan without its own curve keeps following the profile's points
+        assert_eq!(
+            channel_duty(&config, 0, true, 1, Some(45.0), None),
+            Some(3000)
+        );
+    }
+
+    #[test]
+    fn independent_fan_uses_its_own_source() {
+        let mut config = config_with(Vec::new());
+        let mut curve = FanCurve::new("Split".to_string());
+        curve.add_point(0, 0);
+        curve.set_independent(true);
+        // 0% at 40°C up to 100% at 90°C, following the GPU
+        curve.set_fan(FanChannelCurve::new(
+            1,
+            TempSource::Gpu,
+            &[FanPoint::new(40, 0), FanPoint::new(90, 10000)],
+        ));
+        config.curves.push(curve);
+        let split = config.curves.len() - 1;
+        assert_eq!(
+            channel_duty(&config, split, true, 1, Some(90.0), Some(65.0)),
+            Some(5000)
+        );
+    }
+
+    #[test]
+    fn temp_source_ids_round_trip() {
+        for source in TempSource::ALL {
+            assert_eq!(TempSource::from_id(source.id()), Some(source));
+        }
+        assert_eq!(TempSource::from_id("bogus"), None);
     }
 
     #[test]

@@ -1,11 +1,11 @@
-use crate::channels::ChannelAssignment;
+use crate::channels::{ChannelAssignment, TempSource};
 use crate::errors::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use zvariant::Type;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct FanPoint {
     pub temp: i16,
     pub duty: u16,
@@ -23,10 +23,56 @@ impl FanPoint {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct FanCurve {
     name: String,
     points: Vec<FanPoint>,
+    /// Each Thelio Io fan follows its entry in `fans` instead of `points`.
+    #[serde(default)]
+    independent: bool,
+    /// Per-fan curves for independent mode. Kept while not independent, so
+    /// switching back restores them.
+    #[serde(default)]
+    fans: Vec<FanChannelCurve>,
+}
+
+/// One fan's curve within a profile that controls each fan independently.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct FanChannelCurve {
+    /// PWM channel number (1-4)
+    pub channel: u8,
+    pub source: TempSource,
+    points: Vec<FanPoint>,
+}
+
+impl FanChannelCurve {
+    pub fn new(channel: u8, source: TempSource, points: &[FanPoint]) -> Self {
+        let mut fan = Self {
+            channel,
+            source,
+            points: Vec::new(),
+        };
+        fan.set_points(points);
+        fan
+    }
+
+    pub fn points(&self) -> &[FanPoint] {
+        &self.points
+    }
+
+    pub fn set_points(&mut self, points: &[FanPoint]) {
+        self.points = points.to_vec();
+        self.points.sort_by_key(|p| p.temp);
+    }
+
+    pub fn add_point(&mut self, temp: i16, duty: u16) {
+        self.points.push(FanPoint::new(temp, duty));
+        self.points.sort_by_key(|p| p.temp);
+    }
+
+    pub fn remove_point(&mut self, index: usize) -> Option<FanPoint> {
+        (index < self.points.len()).then(|| self.points.remove(index))
+    }
 }
 
 impl FanCurve {
@@ -34,6 +80,40 @@ impl FanCurve {
         Self {
             name,
             points: Vec::new(),
+            independent: false,
+            fans: Vec::new(),
+        }
+    }
+
+    /// Whether each fan follows its own curve in `fans()`.
+    pub fn is_independent(&self) -> bool {
+        self.independent
+    }
+
+    pub fn set_independent(&mut self, independent: bool) {
+        self.independent = independent;
+    }
+
+    pub fn fans(&self) -> &[FanChannelCurve] {
+        &self.fans
+    }
+
+    pub fn fan(&self, channel: u8) -> Option<&FanChannelCurve> {
+        self.fans.iter().find(|f| f.channel == channel)
+    }
+
+    pub fn fan_mut(&mut self, channel: u8) -> Option<&mut FanChannelCurve> {
+        self.fans.iter_mut().find(|f| f.channel == channel)
+    }
+
+    /// Add or replace the curve for `fan.channel`.
+    pub fn set_fan(&mut self, fan: FanChannelCurve) {
+        match self.fan_mut(fan.channel) {
+            Some(existing) => *existing = fan,
+            None => {
+                self.fans.push(fan);
+                self.fans.sort_by_key(|f| f.channel);
+            }
         }
     }
 
@@ -99,49 +179,7 @@ impl FanCurve {
     /// Returns duty in ten-thousandths (0-10000) to match system76-power standard
     /// Temperature is in thousandths of Celsius (e.g., 35000 = 35.0°C)
     pub fn calculate_duty_for_temperature(&self, temp_thousandths: u32) -> u16 {
-        if self.points.is_empty() {
-            return 0;
-        }
-
-        // Convert thousandths of Celsius to whole degrees, since curve points
-        // store temperature in whole °C (e.g. 30000 thousandths -> 30°C)
-        let temp_celsius = (temp_thousandths / 1000) as i16;
-
-        // If temperature is below the lowest point, return the duty of the lowest point
-        if temp_celsius <= self.points[0].temp {
-            return self.points[0].duty;
-        }
-
-        // If temperature is above the highest point, return the duty of the highest point
-        if temp_celsius >= self.points.last().unwrap().temp {
-            return self.points.last().unwrap().duty;
-        }
-
-        // Find the two points to interpolate between
-        for i in 0..self.points.len() - 1 {
-            let point1 = &self.points[i];
-            let point2 = &self.points[i + 1];
-
-            if temp_celsius >= point1.temp && temp_celsius <= point2.temp {
-                // Linear interpolation between the two points
-                let temp1 = point1.temp as f32;
-                let temp2 = point2.temp as f32;
-                let duty1 = point1.duty as f32;
-                let duty2 = point2.duty as f32;
-                let temp_current = temp_celsius as f32;
-
-                // Calculate the interpolation factor
-                let factor = (temp_current - temp1) / (temp2 - temp1);
-
-                // Interpolate the duty
-                let interpolated_duty = duty1 + factor * (duty2 - duty1);
-
-                return interpolated_duty.round() as u16;
-            }
-        }
-
-        // Fallback (should not reach here)
-        0
+        duty_for_temperature(&self.points, temp_thousandths)
     }
 
     /// Calculate fan duty percentage for a given temperature using linear interpolation
@@ -235,6 +273,54 @@ impl FanCurve {
         let curve: FanCurve = serde_json::from_str(&json)?;
         Ok(curve)
     }
+}
+
+/// Fan duty (ten-thousandths, 0-10000) for a temperature in thousandths of
+/// a degree Celsius, linearly interpolated between `points`.
+pub fn duty_for_temperature(points: &[FanPoint], temp_thousandths: u32) -> u16 {
+    if points.is_empty() {
+        return 0;
+    }
+
+    // Convert thousandths of Celsius to whole degrees, since curve points
+    // store temperature in whole °C (e.g. 30000 thousandths -> 30°C)
+    let temp_celsius = (temp_thousandths / 1000) as i16;
+
+    // If temperature is below the lowest point, return the duty of the lowest point
+    if temp_celsius <= points[0].temp {
+        return points[0].duty;
+    }
+
+    // If temperature is above the highest point, return the duty of the highest point
+    if temp_celsius >= points.last().unwrap().temp {
+        return points.last().unwrap().duty;
+    }
+
+    // Find the two points to interpolate between
+    for i in 0..points.len() - 1 {
+        let point1 = &points[i];
+        let point2 = &points[i + 1];
+
+        if temp_celsius >= point1.temp && temp_celsius <= point2.temp {
+            // Linear interpolation between the two points
+            let temp1 = point1.temp as f32;
+            let temp2 = point2.temp as f32;
+            let duty1 = point1.duty as f32;
+            let duty2 = point2.duty as f32;
+            let temp_current = temp_celsius as f32;
+
+            // Calculate the interpolation factor
+            let factor = (temp_current - temp1) / (temp2 - temp1);
+
+            // Interpolate the duty
+            let interpolated_duty = duty1 + factor * (duty2 - duty1);
+
+            return interpolated_duty.round() as u16;
+        }
+    }
+
+    // Fallback (should not reach here)
+    0
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -384,6 +470,45 @@ impl Default for FanCurveConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn independent_profile_keeps_its_fan_curves_through_save_and_load() {
+        let dir = std::env::temp_dir().join(format!("fan_curve_fans_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("config.json");
+
+        let mut custom = FanCurve::new("Quiet GPU".to_string());
+        custom.add_point(40, 3000);
+        custom.set_independent(true);
+        custom.set_fan(FanChannelCurve::new(
+            3,
+            TempSource::Gpu,
+            &[FanPoint::new(70, 9000), FanPoint::new(30, 2000)],
+        ));
+        let mut config = FanCurveConfig::new_for_model("");
+        config.curves.push(custom.clone());
+        config.save_to_file(&path).expect("save");
+
+        let loaded = FanCurveConfig::load_from_file(&path).expect("load");
+        assert_eq!(loaded.curves.last(), Some(&custom));
+        // Points are kept in temperature order
+        assert_eq!(custom.fan(3).unwrap().points()[0].temp, 30);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn curves_from_older_configs_load_as_synced() {
+        let json = r#"{"name": "Old", "points": [{"temp": 50, "duty": 5000}]}"#;
+        let curve: FanCurve = serde_json::from_str(json).unwrap();
+        assert!(!curve.is_independent());
+        assert!(curve.fans().is_empty());
+    }
+
+    #[test]
+    fn dbus_signature_sends_sources_as_strings() {
+        use zvariant::Type;
+        assert_eq!(FanCurve::signature().as_str(), "(sa(nq)ba(ysa(nq)))");
+    }
 
     #[test]
     fn test_fan_curve_interpolation() {
