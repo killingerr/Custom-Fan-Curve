@@ -31,7 +31,3 @@ winapi = { version = "0.3", features = ["winuser"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = "0.9.0"
-
-[[bin]]
-name = "debug_pwm"
-path = "debug_pwm.rs"
