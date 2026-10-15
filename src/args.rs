@@ -67,9 +67,4 @@ pub enum FanCurveCommands {
     Load,
     /// Show live daemon status (temp, duty, fan speeds)
     Status,
-    /// Test fan curve with monitoring
-    Test {
-        /// Duration of test in seconds
-        duration: u64,
-    },
 }

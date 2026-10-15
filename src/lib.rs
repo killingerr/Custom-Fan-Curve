@@ -10,7 +10,6 @@ pub mod cpu_temp;
 pub mod daemon;
 pub mod errors;
 pub mod fan;
-pub mod fan_control;
 pub mod fan_curve_gui;
 pub mod fan_detector;
 pub mod fan_monitor;
@@ -18,8 +17,6 @@ pub mod gpu_info;
 pub mod logging;
 pub mod notifier;
 pub mod overheat;
-pub mod system76_power_client;
-pub mod thelio_io;
 
 // DBus constants following System76 Power patterns
 pub const DBUS_SERVICE_NAME: &str = "com.system76.FanCurveDaemon";

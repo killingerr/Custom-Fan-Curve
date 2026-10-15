@@ -4,12 +4,11 @@ A modern GUI application for controlling fan curves on System76 desktops, built 
 
 ## Features
 
-- **Interactive Fan Curve Editor** - Create custom fan curves with an intuitive GUI
-- **Real-time Temperature Monitoring** - Monitor CPU temperatures and fan speeds
-- **Multiple Curve Profiles** - Save and switch between different fan curve configurations
-- **System76 Integration** - Designed specifically for System76 desktops
-- **Optional Thelio IO Integration** - Experimental hook to the Thelio IO daemon
-- **High Performance** - Built with Rust for optimal performance and reliability
+- **Fan Curve Profiles** - Create, save and switch between fan curve profiles, and pick the one used after a restart
+- **Per-Fan Control** - On Thelio desktops, sync all fans to one curve or give the CPU, intake, GPU and aux fans each their own curve and temperature source
+- **Live Monitoring** - CPU and GPU temperatures and usage, and each fan's duty and speed, with N/A for ports that have no fan
+- **System76 Integration** - Uses system76-power's built-in curves and takes over fan control from it while running
+- **Overheat Protection** - Runs every fan at 100% from 90°C until temperatures drop below 80°C, with desktop notifications
 
 ## Quick Installation
 
@@ -69,27 +68,17 @@ fan-curve --help
 ### GUI Application
 
 1. Launch the application from your applications menu or run `fan-curve --gui`
-2. Select a fan curve from the dropdown menu
-3. Click "Apply" to set the fan curve
-4. Use "Edit" to modify existing curves or create new ones
+2. Select a profile in "Select Fan Curve"
+3. Click "Apply Fan Curve" to use it until the next restart, or "Set as Default" to keep using it after restarts
+4. To change a built-in profile, click "Save as New Profile" and edit the copy
+5. Choose "Sync all fans" to drive every fan from the profile's points, or "Control each fan independently" to give each fan its own points and temperature source
 
 ## Configuration
-### Thelio IO (Experimental)
 
-Set an environment variable to enable Thelio IO integration. When enabled, the app will attempt to detect the Thelio IO DBus service and, if present, use it as a backend for chassis fan telemetry/control in future updates.
-
-```bash
-export FAN_APP_ENABLE_THELIO_IO=1
-# Optional: override service name if needed
-export FAN_APP_THELIO_IO_SERVICE="com.system76.ThelioIo"
-```
-
-Notes:
-- If the service is not present, the application continues to function normally (no-op backend).
-- Current implementation includes stubs for fan RPM/duty and temperature; concrete wiring can be added once the interface is finalized.
-
-
-Configuration files are stored in `~/.fan_curve_app/config.json`. You can edit this file directly or use the GUI to modify settings.
+The daemon (`fan-curve-daemon.service`) controls the fans and keeps its profiles in
+`/etc/fan-curve-app/config.json`; the GUI changes them through it. On Thelio
+desktops each fan port of the Thelio Io board is driven through the kernel's
+`system76_thelio_io` driver.
 
 ### Default Curves
 
@@ -123,17 +112,11 @@ cargo build --release
 
 ## Uninstallation
 
-To uninstall the application:
+The installer creates an uninstall script that removes the daemon, the
+application, its configuration and its desktop entries:
 
 ```bash
-# Run the uninstall script
 ~/uninstall-fan-curve-app.sh
-
-# Or manually remove:
-sudo rm /usr/local/bin/fan-curve-app /usr/local/bin/fan-curve
-rm -rf ~/.fan_curve_app
-rm ~/.local/share/applications/fan-curve-app.desktop
-rm ~/.local/share/icons/fan-curve-app.svg
 ```
 
 ## Troubleshooting

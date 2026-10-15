@@ -16,9 +16,7 @@ pub enum CpuManufacturer {
 #[derive(Debug, Clone)]
 pub struct CpuTempSensor {
     pub manufacturer: CpuManufacturer,
-    pub hwmon_path: String,
     pub temp_input_path: String,
-    pub temp_label_path: String,
     pub sensor_name: String,
 }
 
@@ -133,14 +131,13 @@ impl CpuTempDetector {
                     if let Ok(temp_input_path) =
                         self.find_temp_input_file(&hwmon_path, manufacturer)
                     {
-                        let temp_label_path =
-                            self.find_temp_label_file(&hwmon_path, &temp_input_path)?;
+                        // The sensor must have a label, as the input file was
+                        // picked by it
+                        self.find_temp_label_file(&hwmon_path, &temp_input_path)?;
 
                         return Ok(CpuTempSensor {
                             manufacturer: manufacturer.clone(),
-                            hwmon_path: hwmon_path.to_string_lossy().to_string(),
                             temp_input_path,
-                            temp_label_path,
                             sensor_name,
                         });
                     }
@@ -267,14 +264,6 @@ impl CpuTempDetector {
     pub fn is_initialized(&self) -> bool {
         self.sensor.is_some()
     }
-
-    /// Get the detected CPU manufacturer
-    pub fn manufacturer(&self) -> CpuManufacturer {
-        self.sensor
-            .as_ref()
-            .map(|s| s.manufacturer.clone())
-            .unwrap_or(CpuManufacturer::Unknown)
-    }
 }
 
 impl Default for CpuTempDetector {
@@ -296,13 +285,5 @@ mod tests {
             Some("AMD Ryzen 9 7950X 16-Core Processor")
         );
         assert_eq!(parse_model_name("processor\t: 0\n"), None);
-    }
-
-    #[test]
-    fn test_cpu_manufacturer_detection() {
-        let detector = CpuTempDetector::new();
-        // This test would require mocking /proc/cpuinfo
-        // For now, just test that the method exists
-        assert!(true);
     }
 }

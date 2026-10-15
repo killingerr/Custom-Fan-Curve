@@ -8,7 +8,6 @@ use crate::{
     fan::{FanCurve, FanCurveConfig},
     fan_detector::FanDetector,
     overheat::OverheatGuard,
-    thelio_io::ThelioIoClient,
     DBUS_OBJECT_PATH, DBUS_SERVICE_NAME,
 };
 use log::{debug, error, info, warn};
@@ -47,8 +46,6 @@ pub struct FanCurveDaemon {
     config: Arc<Mutex<FanCurveConfig>>,
     current_curve_index: Arc<Mutex<usize>>,
     status: Arc<Mutex<DaemonStatus>>,
-    #[allow(dead_code)]
-    thelio: Option<ThelioIoClient>,
 }
 
 impl FanCurveDaemon {
@@ -75,18 +72,6 @@ impl FanCurveDaemon {
         let config = Arc::new(Mutex::new(loaded));
         let current_curve_index = Arc::new(Mutex::new(initial_index));
 
-        // Thelio client is optional and non-fatal if unavailable
-        let thelio = match ThelioIoClient::new() {
-            Ok(client) => {
-                if client.available() {
-                    Some(client)
-                } else {
-                    None
-                }
-            }
-            Err(_) => None,
-        };
-
         Ok(Self {
             config,
             current_curve_index,
@@ -94,7 +79,6 @@ impl FanCurveDaemon {
                 fan_control: (fan_control::STARTING.to_string(), String::new()),
                 ..Default::default()
             })),
-            thelio,
         })
     }
 

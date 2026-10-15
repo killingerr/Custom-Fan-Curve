@@ -1,7 +1,7 @@
 # Fan Curve App Makefile
 # Provides easy commands for building, testing, and installing the application
 
-.PHONY: help build release test clean install uninstall run-gui run-cli
+.PHONY: help build release test clean run-gui run-cli
 
 # Default target
 help:
@@ -21,9 +21,7 @@ help:
 	@echo "  make test      - Run all tests"
 	@echo "  make test-unit - Run unit tests only"
 	@echo ""
-	@echo "Installation:"
-	@echo "  make install   - Install to system"
-	@echo "  make uninstall - Remove from system"
+	@echo "Installation: ./install.sh --local"
 	@echo ""
 	@echo "Development:"
 	@echo "  make check     - Run cargo check"
@@ -69,24 +67,6 @@ fmt:
 clippy:
 	@echo "Running clippy linter..."
 	cargo clippy -- -D warnings
-
-# Installation targets
-install: release
-	@echo "Installing application..."
-	sudo cp target/release/fan-curve-app /usr/local/bin/
-	sudo chmod +x /usr/local/bin/fan-curve-app
-	@if [ ! -L /usr/local/bin/fan-curve ]; then \
-		sudo ln -s /usr/local/bin/fan-curve-app /usr/local/bin/fan-curve; \
-	fi
-	@echo "Creating configuration directory..."
-	@mkdir -p ~/.fan_curve_app
-	@echo "Installation completed!"
-	@echo "Usage: fan-curve --gui"
-
-uninstall:
-	@echo "Uninstalling application..."
-	@sudo rm -f /usr/local/bin/fan-curve-app /usr/local/bin/fan-curve
-	@echo "Application uninstalled!"
 
 # Clean target
 clean:

@@ -4,9 +4,9 @@ use crate::{
     args::{Args, Commands, FanCurveCommands},
     errors::{FanCurveError, Result},
     fan::FanCurve,
-    fan_monitor, DBUS_INTERFACE_NAME, DBUS_OBJECT_PATH, DBUS_SERVICE_NAME,
+    DBUS_INTERFACE_NAME, DBUS_OBJECT_PATH, DBUS_SERVICE_NAME,
 };
-use log::{debug, error, info};
+use log::{debug, error};
 use zbus::Connection;
 
 /// Client for communicating with the fan curve daemon
@@ -77,7 +77,6 @@ impl FanCurveClient {
             FanCurveCommands::Save => self.save_config().await,
             FanCurveCommands::Load => self.load_config().await,
             FanCurveCommands::Status => self.show_status().await,
-            FanCurveCommands::Test { duration } => self.test_fan_curve(duration).await,
         }
     }
 
@@ -254,19 +253,6 @@ impl FanCurveClient {
             }
         }
 
-        Ok(())
-    }
-
-    /// Test fan curve with monitoring
-    async fn test_fan_curve(&self, duration: u64) -> Result<()> {
-        debug!("Testing fan curve for {} seconds", duration);
-
-        info!("Starting fan curve test for {} seconds", duration);
-
-        // Run the fan curve test
-        fan_monitor::test_fan_curve("current", duration).await?;
-
-        info!("Fan curve test completed");
         Ok(())
     }
 }

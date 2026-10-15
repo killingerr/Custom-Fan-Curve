@@ -210,11 +210,7 @@ impl FanCurveApp {
 
         let mut fan_monitor = FanMonitor::new();
         if let Err(e) = fan_monitor.initialize() {
-            eprintln!(
-                "Warning: Failed to initialize CPU temperature detection: {}",
-                e
-            );
-            eprintln!("Falling back to simulation mode");
+            eprintln!("Warning: Failed to detect sensors: {}", e);
         }
 
         let fans = daemon.as_ref().and_then(fetch_channels).unwrap_or_default();
@@ -622,7 +618,7 @@ impl FanCurveApp {
                         }
                         Ok(false) => {
                             self.set_status(
-                                "Daemon not running — curve saved but fans are NOT controlled. Run: sudo ./scripts/install-daemon.sh"
+                                "Daemon not running — curve saved but fans are NOT controlled. Start it: sudo systemctl start fan-curve-daemon"
                                     .to_string(),
                             );
                         }
@@ -1116,7 +1112,7 @@ impl eframe::App for FanCurveApp {
             if self.daemon.is_none() {
                 ui.colored_label(
                     egui::Color32::YELLOW,
-                    "Start: sudo ./scripts/install-daemon.sh (or: sudo systemctl start fan-curve-daemon)",
+                    "Start it: sudo systemctl start fan-curve-daemon (or install the app with ./install.sh)",
                 );
             }
 
