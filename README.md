@@ -1,13 +1,13 @@
 # Fan Curve Control App
 
-A modern GUI application for controlling CPU fan curves on System76 laptops, built with Rust and egui.
+A modern GUI application for controlling fan curves on System76 desktops, built with Rust and egui.
 
 ## Features
 
 - **Interactive Fan Curve Editor** - Create custom fan curves with an intuitive GUI
 - **Real-time Temperature Monitoring** - Monitor CPU temperatures and fan speeds
 - **Multiple Curve Profiles** - Save and switch between different fan curve configurations
-- **System76 Integration** - Designed specifically for System76 laptops
+- **System76 Integration** - Designed specifically for System76 desktops
 - **Optional Thelio IO Integration** - Experimental hook to the Thelio IO daemon
 - **High Performance** - Built with Rust for optimal performance and reliability
 
@@ -43,7 +43,7 @@ curl -sSL https://raw.githubusercontent.com/killingerr/Custom-Fan-Curve/main/ins
 ## Requirements
 
 - **Operating System:** Linux (tested on Ubuntu, Pop!_OS, Arch Linux)
-- **Hardware:** System76 laptop
+- **Hardware:** System76 desktop
 - **Dependencies:** Rust 1.75+, build tools, X11 libraries
 
 The installation script will automatically install all required dependencies.

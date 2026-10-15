@@ -1,7 +1,7 @@
 {
   "name": "fan-curve-app",
   "version": "1.0.0",
-  "description": "A modern Rust-based application for managing CPU fan curves on System76 laptops",
+  "description": "A modern Rust-based application for managing fan curves on System76 desktops",
   "main": "index.js",
   "scripts": {
     "install": "./install.sh",
