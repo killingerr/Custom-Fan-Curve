@@ -57,7 +57,8 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 fn run_gui() -> Result<(), eframe::Error> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([400.0, 300.0])
+            .with_inner_size(fan_curve_app::fan_curve_gui::initial_window_size())
+            .with_min_inner_size(fan_curve_app::fan_curve_gui::MIN_WINDOW_SIZE)
             .with_resizable(true)
             .with_decorations(true)
             .with_title("Fan Curve Control"),

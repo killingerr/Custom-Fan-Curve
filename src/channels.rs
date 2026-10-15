@@ -354,6 +354,42 @@ fn read_label(hwmon: &Path, channel: u8, fixed_wiring: bool) -> String {
         .unwrap_or_else(|_| format!("Fan {}", channel))
 }
 
+/// How long a channel told to spin must report 0 RPM before it counts as
+/// having no fan, so a fan spinning up from 0% isn't flagged.
+pub const NO_FAN_AFTER: Duration = Duration::from_secs(3);
+
+/// Whether a fan is connected to a channel, judged from its RPM signal: the
+/// board can't tell, and accepts a duty on every channel either way.
+#[derive(Debug, Clone, Default)]
+pub struct FanPresence {
+    /// When the channel started reporting 0 RPM while told to spin
+    silent_since: Option<Instant>,
+    missing: bool,
+}
+
+impl FanPresence {
+    /// Record one reading: `rpm` measured with `duty` (0-10000) commanded.
+    pub fn update(&mut self, rpm: u16, duty: u16, now: Instant) {
+        if rpm > 0 {
+            *self = Self::default();
+        } else if duty > 0 {
+            let since = *self.silent_since.get_or_insert(now);
+            if now.duration_since(since) >= NO_FAN_AFTER {
+                self.missing = true;
+            }
+        } else {
+            // At 0% a connected fan may stop; this says nothing either way,
+            // so a missing fan stays missing.
+            self.silent_since = None;
+        }
+    }
+
+    /// No fan has reported on the channel despite being told to spin.
+    pub fn is_missing(&self) -> bool {
+        self.missing
+    }
+}
+
 /// Latest GPU reading (temperature or usage).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GpuReading {
@@ -680,6 +716,41 @@ mod tests {
             channel_duty(&config, split, true, 1, Some(90.0), Some(65.0)),
             Some(5000)
         );
+    }
+
+    #[test]
+    fn fan_is_missing_only_after_staying_silent_while_told_to_spin() {
+        let start = Instant::now();
+        let at = |secs: u64| start + Duration::from_secs(secs);
+        let mut fan = FanPresence::default();
+
+        // Told to spin, no RPM yet: could still be spinning up
+        fan.update(0, 3000, at(0));
+        fan.update(0, 3000, at(2));
+        assert!(!fan.is_missing());
+        // Still silent after 3s: no fan on the channel
+        fan.update(0, 3000, at(3));
+        assert!(fan.is_missing());
+        // Dropping to 0% doesn't hide it
+        fan.update(0, 0, at(4));
+        assert!(fan.is_missing());
+        // A fan plugged in reports RPM and counts again right away
+        fan.update(650, 3000, at(5));
+        assert!(!fan.is_missing());
+    }
+
+    #[test]
+    fn stopped_fan_at_zero_duty_is_not_missing() {
+        let start = Instant::now();
+        let mut fan = FanPresence::default();
+        for secs in 0..10 {
+            fan.update(0, 0, start + Duration::from_secs(secs));
+        }
+        assert!(!fan.is_missing());
+        // Spinning up from 0% gets the full grace period
+        fan.update(0, 3000, start + Duration::from_secs(10));
+        fan.update(0, 3000, start + Duration::from_secs(12));
+        assert!(!fan.is_missing());
     }
 
     #[test]

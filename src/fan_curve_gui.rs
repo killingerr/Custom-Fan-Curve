@@ -1,4 +1,4 @@
-use crate::channels::{GpuReading, GpuTemp, TempSource};
+use crate::channels::{FanPresence, GpuReading, GpuTemp, TempSource};
 use crate::errors::Result;
 use crate::fan::{FanChannelCurve, FanCurve, FanCurveConfig, FanPoint};
 use crate::fan_monitor::FanMonitor;
@@ -46,16 +46,22 @@ pub struct FanCurveApp {
     selected_fan: usize,
     /// Curve the open add/edit point dialog changes
     point_target: PointTarget,
+    /// Latest window size, saved on exit for the next launch
+    window_size: Option<egui::Vec2>,
 }
 
 /// One Thelio Io fan channel as shown in the GUI.
 struct FanSetting {
     number: u8,
     label: String,
+    /// Temperature the fan follows now
+    source: TempSource,
     /// Temperature the fan follows when the profile isn't independent
     synced_source: TempSource,
     /// Current duty (0-10000) reported by the daemon
     duty: u16,
+    /// Whether a fan is connected, from its RPM while told to spin
+    presence: FanPresence,
 }
 
 /// Curve a point edit applies to.
@@ -81,14 +87,24 @@ fn fetch_channels(proxy: &zbus::blocking::Proxy<'static>) -> Option<Vec<FanSetti
     Some(
         channels
             .into_iter()
-            .map(|(number, label, _source, synced_source, duty)| FanSetting {
+            .map(|(number, label, source, synced_source, duty)| FanSetting {
                 number,
                 label,
+                source,
                 synced_source,
                 duty,
+                presence: FanPresence::default(),
             })
             .collect(),
     )
+}
+
+/// Menu height that shows `rows` dropdown entries without scrolling, up to
+/// most of the window; only longer lists scroll.
+fn menu_height(ui: &egui::Ui, rows: usize) -> f32 {
+    let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+    let fit = row * rows as f32 + ui.spacing().menu_margin.sum().y;
+    fit.min(ui.ctx().screen_rect().height() * 0.8)
 }
 
 /// List `points` with Edit and Remove buttons.
@@ -172,7 +188,20 @@ fn load_initial_curves(
 }
 
 impl FanCurveApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // egui's default text is small on high-resolution screens
+        cc.egui_ctx.all_styles_mut(|style| {
+            for (text_style, font) in style.text_styles.iter_mut() {
+                font.size = match text_style {
+                    egui::TextStyle::Heading => 22.0,
+                    egui::TextStyle::Body | egui::TextStyle::Button => 15.0,
+                    egui::TextStyle::Monospace => 14.0,
+                    egui::TextStyle::Small => 12.0,
+                    egui::TextStyle::Name(_) => font.size,
+                };
+            }
+        });
+
         // Prefer the daemon's persisted config when available so the GUI
         // matches what survives reboot; fall back to the user config file.
         let daemon = connect_daemon();
@@ -226,6 +255,7 @@ impl FanCurveApp {
             fans,
             selected_fan: 0,
             point_target: PointTarget::Profile,
+            window_size: None,
         }
     }
 
@@ -318,6 +348,102 @@ impl FanCurveApp {
         }
     }
 
+    /// Temperatures, usage, and a row per fan with what it follows, its duty
+    /// and its speed.
+    fn show_live_data(&self, ui: &mut egui::Ui) {
+        ui.heading("Live Fan Data");
+        let Some(data) = &self.current_fan_data else {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Collecting fan data...");
+            });
+            return;
+        };
+
+        egui::Grid::new("live_readings")
+            .num_columns(4)
+            .spacing([24.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("CPU Temp:");
+                match self.cpu_temp {
+                    Some(t) => ui.colored_label(temp_color(t), format!("{:.1}°C", t)),
+                    None => ui.colored_label(egui::Color32::GRAY, "Unavailable"),
+                };
+                ui.label("CPU Usage:");
+                ui.colored_label(
+                    usage_color(data.cpu_usage),
+                    format!("{:.1}%", data.cpu_usage),
+                );
+                ui.end_row();
+
+                ui.label("GPU Temp:");
+                show_gpu_reading(ui, self.gpu_temp, |t| {
+                    (temp_color(t), format!("{:.1}°C", t))
+                });
+                ui.label("GPU Usage:");
+                show_gpu_reading(ui, self.gpu_usage, |u| {
+                    (usage_color(u), format!("{:.0}%", u))
+                });
+                ui.end_row();
+            });
+
+        ui.add_space(8.0);
+        if data.fan_speeds.is_empty() && self.fans.is_empty() {
+            ui.colored_label(egui::Color32::GRAY, "No fans detected");
+        } else {
+            egui::Grid::new("live_fans")
+                .num_columns(4)
+                .striped(true)
+                .spacing([32.0, 6.0])
+                .show(ui, |ui| {
+                    for heading in ["Fan", "Follows", "Duty", "Speed"] {
+                        ui.strong(heading);
+                    }
+                    ui.end_row();
+
+                    if self.fans.is_empty() {
+                        // No per-channel data from the daemon: the one duty
+                        // applies to every fan
+                        for (_, rpm, label) in &data.fan_speeds {
+                            ui.label(label);
+                            ui.label("CPU");
+                            ui.colored_label(
+                                duty_color(data.fan_duty),
+                                format!("{}%", data.fan_duty / 100),
+                            );
+                            ui.colored_label(rpm_color(*rpm), format!("{} RPM", rpm));
+                            ui.end_row();
+                        }
+                    }
+                    for fan in &self.fans {
+                        ui.label(&fan.label);
+                        ui.label(fan.source.label());
+                        if fan.presence.is_missing() {
+                            for _ in 0..2 {
+                                ui.colored_label(egui::Color32::GRAY, "N/A").on_hover_text(
+                                    "No fan detected on this port: it reports no RPM while told to spin.",
+                                );
+                            }
+                        } else {
+                            let rpm = data
+                                .fan_speeds
+                                .iter()
+                                .find(|(n, _, _)| *n == fan.number)
+                                .map_or(0, |&(_, rpm, _)| rpm);
+                            ui.colored_label(duty_color(fan.duty), format!("{}%", fan.duty / 100));
+                            ui.colored_label(rpm_color(rpm), format!("{} RPM", rpm));
+                        }
+                        ui.end_row();
+                    }
+                });
+        }
+        ui.add_space(4.0);
+        ui.small(format!(
+            "Last update: {}",
+            data.timestamp.format("%H:%M:%S")
+        ));
+    }
+
     fn current_profile(&self) -> &FanCurve {
         &self.fan_curves[self.current_curve_index]
     }
@@ -331,6 +457,9 @@ impl FanCurveApp {
     /// each fan following its own curve. Fans without a curve yet start from
     /// the profile's points and the temperature they follow when synced.
     fn set_independent_fans(&mut self, independent: bool) {
+        if self.builtin_selected() {
+            return;
+        }
         let profile = &mut self.fan_curves[self.current_curve_index];
         profile.set_independent(independent);
         if independent {
@@ -369,6 +498,9 @@ impl FanCurveApp {
     }
 
     fn add_target_point(&mut self, temp: i16, duty: u16) {
+        if self.builtin_selected() {
+            return;
+        }
         match self.point_target {
             PointTarget::Profile => self.fan_curves[self.current_curve_index].add_point(temp, duty),
             PointTarget::Fan(channel) => self.fan_curve_mut(channel).add_point(temp, duty),
@@ -376,13 +508,32 @@ impl FanCurveApp {
     }
 
     fn remove_target_point(&mut self, index: usize) -> Option<FanPoint> {
+        if self.builtin_selected() {
+            return None;
+        }
         match self.point_target {
             PointTarget::Profile => self.fan_curves[self.current_curve_index].remove_point(index),
             PointTarget::Fan(channel) => self.fan_curve_mut(channel).remove_point(index),
         }
     }
 
+    /// True, with a status message, when the selected profile is a
+    /// read-only built-in.
+    fn builtin_selected(&mut self) -> bool {
+        let builtin = self.current_profile().is_builtin();
+        if builtin {
+            self.set_status(
+                "Built-in profiles can't be changed. Use Save as New Profile to make an editable copy."
+                    .to_string(),
+            );
+        }
+        builtin
+    }
+
     fn apply_point_action(&mut self, target: PointTarget, action: PointAction) {
+        if self.builtin_selected() {
+            return;
+        }
         self.point_target = target;
         match action {
             PointAction::Edit(i) => {
@@ -418,16 +569,18 @@ impl FanCurveApp {
         // Current fan profile display
         let current_profile = self.fan_curves[self.current_curve_index].name();
         ui.label(format!("Current Profile: {}", current_profile));
-        if self.fan_curves[self.current_curve_index].is_builtin() {
+        let builtin = self.current_profile().is_builtin();
+        if builtin {
             ui.colored_label(
                 egui::Color32::from_rgb(180, 140, 40),
-                "Built-in profile: edits apply for this session only. Save as New Profile to keep them.",
+                "Built-in profile (read-only). Use Save as New Profile to make an editable copy.",
             );
         }
 
         // Fan curve selection
         egui::ComboBox::from_label("Select Fan Curve")
             .selected_text(self.fan_curves[self.current_curve_index].name())
+            .height(menu_height(ui, self.fan_curves.len()))
             .show_ui(ui, |ui| {
                 for (index, curve) in self.fan_curves.iter().enumerate() {
                     let mut text = curve.name().to_string();
@@ -438,6 +591,86 @@ impl FanCurveApp {
                 }
             });
 
+        // Built-in profiles can be viewed and used, not changed
+        ui.add_enabled_ui(!builtin, |ui| self.show_curve_editor(ui));
+
+        ui.separator();
+
+        ui.horizontal_wrapped(|ui| {
+            // Save as new profile button
+            if ui.button("Save as New Profile").clicked() {
+                self.show_save_dialog = true;
+            }
+
+            // Apply button — temporary for this session; reboot returns to default
+            if ui.button("Apply Fan Curve").clicked() {
+                if let Err(e) = self.save_config() {
+                    self.set_status(format!("Failed to save: {}", e));
+                } else {
+                    let default_name = self
+                        .default_curve_index
+                        .and_then(|i| self.fan_curves.get(i))
+                        .map(|c| c.name().to_string())
+                        .unwrap_or_else(|| "Standard".to_string());
+                    let name = self.fan_curves[self.current_curve_index].name().to_string();
+                    match self.push_config_to_daemon() {
+                        Ok(true) => {
+                            self.set_status(format!(
+                                "Applied '{}' for this session. Reboot returns to default '{}'.",
+                                name, default_name
+                            ));
+                        }
+                        Ok(false) => {
+                            self.set_status(
+                                "Daemon not running — curve saved but fans are NOT controlled. Run: sudo ./scripts/install-daemon.sh"
+                                    .to_string(),
+                            );
+                        }
+                        Err(e) => {
+                            self.set_status(format!(
+                                "Saved locally, but daemon rejected config: {}",
+                                e
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // Set as default — persists across reboots via the daemon config
+            if ui.button("Set as Default").clicked() {
+                self.default_curve_index = Some(self.current_curve_index);
+                let name = self.fan_curves[self.current_curve_index].name().to_string();
+                if let Err(e) = self.save_config() {
+                    self.set_status(format!("Failed to save: {}", e));
+                } else {
+                    match self.push_config_to_daemon() {
+                        Ok(true) => self.set_status(format!(
+                            "'{}' is now the default and will be used after reboot.",
+                            name
+                        )),
+                        Ok(false) => self.set_status(format!(
+                            "'{}' saved as default locally. Start the daemon so it persists across reboots.",
+                            name
+                        )),
+                        Err(e) => self.set_status(format!(
+                            "Saved locally, but daemon rejected default: {}",
+                            e
+                        )),
+                    }
+                }
+            }
+        });
+
+        if !self.fans.is_empty() && !self.profile_is_independent() {
+            ui.separator();
+            ui.label("Temperature each fan follows:");
+            self.show_fan_sources(ui);
+        }
+    }
+
+    /// The sync/independent switch and the points of the selected profile,
+    /// or each fan's tab when it's independent.
+    fn show_curve_editor(&mut self, ui: &mut egui::Ui) {
         if !self.fans.is_empty() {
             ui.horizontal(|ui| {
                 ui.label("Fans:");
@@ -472,77 +705,6 @@ impl FanCurveApp {
                 self.open_add_point_dialog(PointTarget::Profile);
             }
         }
-
-        ui.separator();
-
-        // Save as new profile button
-        if ui.button("Save as New Profile").clicked() {
-            self.show_save_dialog = true;
-        }
-
-        // Apply button — temporary for this session; reboot returns to default
-        if ui.button("Apply Fan Curve").clicked() {
-            if let Err(e) = self.save_config() {
-                self.set_status(format!("Failed to save: {}", e));
-            } else {
-                let default_name = self
-                    .default_curve_index
-                    .and_then(|i| self.fan_curves.get(i))
-                    .map(|c| c.name().to_string())
-                    .unwrap_or_else(|| "Standard".to_string());
-                let name = self.fan_curves[self.current_curve_index].name().to_string();
-                match self.push_config_to_daemon() {
-                    Ok(true) => {
-                        self.set_status(format!(
-                            "Applied '{}' for this session. Reboot returns to default '{}'.",
-                            name, default_name
-                        ));
-                    }
-                    Ok(false) => {
-                        self.set_status(
-                            "Daemon not running — curve saved but fans are NOT controlled. Run: sudo ./scripts/install-daemon.sh"
-                                .to_string(),
-                        );
-                    }
-                    Err(e) => {
-                        self.set_status(format!(
-                            "Saved locally, but daemon rejected config: {}",
-                            e
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Set as default — persists across reboots via the daemon config
-        if ui.button("Set as Default").clicked() {
-            self.default_curve_index = Some(self.current_curve_index);
-            let name = self.fan_curves[self.current_curve_index].name().to_string();
-            if let Err(e) = self.save_config() {
-                self.set_status(format!("Failed to save: {}", e));
-            } else {
-                match self.push_config_to_daemon() {
-                    Ok(true) => self.set_status(format!(
-                        "'{}' is now the default and will be used after reboot.",
-                        name
-                    )),
-                    Ok(false) => self.set_status(format!(
-                        "'{}' saved as default locally. Start the daemon so it persists across reboots.",
-                        name
-                    )),
-                    Err(e) => self.set_status(format!(
-                        "Saved locally, but daemon rejected default: {}",
-                        e
-                    )),
-                }
-            }
-        }
-
-        if !self.fans.is_empty() && !self.profile_is_independent() {
-            ui.separator();
-            ui.label("Temperature each fan follows:");
-            self.show_fan_sources(ui);
-        }
     }
 
     /// A temperature source picker and current duty for every fan.
@@ -552,7 +714,7 @@ impl FanCurveApp {
             ui.horizontal(|ui| {
                 ui.label(format!("{}:", fan.label));
                 changed |= source_picker(ui, ("synced", fan.number), &mut fan.synced_source);
-                ui.label(format!("now {}%", fan.duty / 100));
+                show_fan_now(ui, fan.duty, fan.presence.is_missing());
             });
         }
         if changed {
@@ -574,12 +736,13 @@ impl FanCurveApp {
         let channel = self.fans[self.selected_fan].number;
         let label = self.fans[self.selected_fan].label.clone();
         let duty = self.fans[self.selected_fan].duty;
+        let missing = self.fans[self.selected_fan].presence.is_missing();
         let mut changed = false;
         ui.horizontal(|ui| {
             ui.label("Follows:");
             let source = &mut self.fan_curve_mut(channel).source;
             changed |= source_picker(ui, ("fan", channel), source);
-            ui.label(format!("now {}%", duty / 100));
+            show_fan_now(ui, duty, missing);
         });
 
         // Replace this fan's points with another profile's curve for it, or
@@ -587,6 +750,7 @@ impl FanCurveApp {
         let mut copy_from = None;
         egui::ComboBox::from_id_salt("copy_profile_to_fan")
             .selected_text("Copy curve from profile...")
+            .height(menu_height(ui, self.fan_curves.len()))
             .show_ui(ui, |ui| {
                 for (index, curve) in self.fan_curves.iter().enumerate() {
                     if ui.selectable_label(false, curve.name()).clicked() {
@@ -634,21 +798,9 @@ impl FanCurveApp {
 
     /// Auto-save configuration with error handling
     fn auto_save_config(&mut self) {
-        let editing_builtin = self.fan_curves[self.current_curve_index].is_builtin();
-
         if let Err(e) = self.save_config() {
             eprintln!("Auto-save failed: {}", e);
             self.set_status(format!("Auto-save failed: {}", e));
-            return;
-        }
-
-        if editing_builtin {
-            self.set_status(
-                "Built-in profile changes are temporary. Use Save as New Profile to keep them."
-                    .to_string(),
-            );
-            // Still push so Apply/session control can use the in-memory edits.
-            let _ = self.push_config_to_daemon();
             return;
         }
 
@@ -657,6 +809,16 @@ impl FanCurveApp {
             Ok(false) => self.set_status("Configuration saved".to_string()),
             Err(e) => self.set_status(format!("Saved locally, but daemon push failed: {}", e)),
         }
+    }
+}
+
+/// A fan's current duty in the editors, or that no fan is connected.
+fn show_fan_now(ui: &mut egui::Ui, duty: u16, missing: bool) {
+    if missing {
+        ui.colored_label(egui::Color32::GRAY, "no fan detected")
+            .on_hover_text("This port reports no RPM while told to spin.");
+    } else {
+        ui.label(format!("now {}%", duty / 100));
     }
 }
 
@@ -673,6 +835,90 @@ fn source_picker(ui: &mut egui::Ui, id: impl std::hash::Hash, source: &mut TempS
     *source != before
 }
 
+/// Size the window opens at when none was saved.
+const DEFAULT_WINDOW_SIZE: [f32; 2] = [1100.0, 900.0];
+/// Smallest window that fits the editor and fan table without clipping.
+pub const MIN_WINDOW_SIZE: [f32; 2] = [720.0, 560.0];
+
+fn window_size_path() -> std::path::PathBuf {
+    FanCurveConfig::get_config_path().with_file_name("window.json")
+}
+
+/// Window size saved by the last run, or the default.
+pub fn initial_window_size() -> [f32; 2] {
+    std::fs::read_to_string(window_size_path())
+        .ok()
+        .and_then(|json| serde_json::from_str::<[f32; 2]>(&json).ok())
+        .filter(|[w, h]| w.is_finite() && h.is_finite())
+        .map(|[w, h]| {
+            [
+                w.clamp(MIN_WINDOW_SIZE[0], 4000.0),
+                h.clamp(MIN_WINDOW_SIZE[1], 4000.0),
+            ]
+        })
+        .unwrap_or(DEFAULT_WINDOW_SIZE)
+}
+
+fn save_window_size(size: egui::Vec2) {
+    let path = window_size_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write(&path, format!("[{}, {}]", size.x, size.y)) {
+        eprintln!("Failed to save window size: {}", e);
+    }
+}
+
+fn duty_color(duty: u16) -> egui::Color32 {
+    if duty > 8000 {
+        egui::Color32::RED
+    } else if duty > 5000 {
+        egui::Color32::YELLOW
+    } else {
+        egui::Color32::GREEN
+    }
+}
+
+fn rpm_color(rpm: u16) -> egui::Color32 {
+    if rpm > 2500 {
+        egui::Color32::RED
+    } else if rpm > 1500 {
+        egui::Color32::YELLOW
+    } else {
+        egui::Color32::GREEN
+    }
+}
+
+fn usage_color(percent: f32) -> egui::Color32 {
+    if percent > 80.0 {
+        egui::Color32::RED
+    } else if percent > 50.0 {
+        egui::Color32::YELLOW
+    } else {
+        egui::Color32::GREEN
+    }
+}
+
+/// A GPU temperature or usage reading, or why there isn't one.
+fn show_gpu_reading(
+    ui: &mut egui::Ui,
+    reading: Option<GpuReading>,
+    text: impl Fn(f32) -> (egui::Color32, String),
+) {
+    match reading {
+        Some(GpuReading::Value(v)) => {
+            let (color, label) = text(v);
+            ui.colored_label(color, label);
+        }
+        Some(GpuReading::Asleep) => {
+            ui.colored_label(egui::Color32::GRAY, "Off (powered down)");
+        }
+        _ => {
+            ui.colored_label(egui::Color32::GRAY, "Unavailable");
+        }
+    }
+}
+
 /// Colour for a temperature reading in the Live Fan Data section.
 fn temp_color(celsius: f32) -> egui::Color32 {
     if celsius > 70.0 {
@@ -685,7 +931,17 @@ fn temp_color(celsius: f32) -> egui::Color32 {
 }
 
 impl eframe::App for FanCurveApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let Some(size) = self.window_size {
+            save_window_size(size);
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(rect) = ctx.input(|i| i.viewport().inner_rect) {
+            self.window_size = Some(rect.size());
+        }
+
         // Always update live fan data every 1s
         if self.last_fan_data_update.elapsed() >= std::time::Duration::from_secs(1) {
             // Prefer telemetry from the daemon when connected
@@ -714,9 +970,18 @@ impl eframe::App for FanCurveApp {
                         for fan in &mut self.fans {
                             if let Some(latest) = fans.iter().find(|f| f.number == fan.number) {
                                 fan.duty = latest.duty;
+                                fan.source = latest.source;
                             }
                         }
                     }
+                }
+                let speeds = self.current_fan_data.as_ref().map(|d| &d.fan_speeds);
+                let now = std::time::Instant::now();
+                for fan in &mut self.fans {
+                    let rpm = speeds
+                        .and_then(|s| s.iter().find(|(n, _, _)| *n == fan.number))
+                        .map_or(0, |&(_, rpm, _)| rpm);
+                    fan.presence.update(rpm, fan.duty, now);
                 }
 
                 self.overheat_alert = proxy
@@ -785,6 +1050,8 @@ impl eframe::App for FanCurveApp {
 
         // Main content area
         egui::CentralPanel::default().show(ctx, |ui| {
+            // Scrolls only when the window is too small for everything
+            egui::ScrollArea::vertical().show(ui, |ui| {
             ui.heading("Fan Curve Control");
 
             // CPU manufacturer information
@@ -865,7 +1132,13 @@ impl eframe::App for FanCurveApp {
 
             ui.separator();
 
-            self.show_profile_editor(ui);
+            // Editor on the left, live readings on the right
+            ui.columns(2, |columns| {
+                // Columns stretch widgets to their width; keep buttons compact
+                let layout = egui::Layout::top_down(egui::Align::Min);
+                columns[0].with_layout(layout, |ui| self.show_profile_editor(ui));
+                columns[1].with_layout(layout, |ui| self.show_live_data(ui));
+            });
 
             ui.separator();
 
@@ -909,11 +1182,16 @@ impl eframe::App for FanCurveApp {
                             self.new_curve_name.clear();
                         } else {
                             let mut new_curve = self.fan_curves[self.current_curve_index].clone();
-                            new_curve.set_name(name);
+                            new_curve.set_name(name.clone());
                             self.fan_curves.push(new_curve);
+                            // Switch to the copy so it can be edited right away
+                            self.current_curve_index = self.fan_curves.len() - 1;
                             self.new_curve_name.clear();
-                            self.set_status("Profile saved!".to_string());
                             self.auto_save_config();
+                            self.set_status(format!(
+                                "Saved '{}' and switched to it. Set as Default to use it after restarts.",
+                                name
+                            ));
                         }
                     } else {
                         self.new_curve_name.clear();
@@ -1080,178 +1358,8 @@ impl eframe::App for FanCurveApp {
             if let Some(status) = &self.status_message {
                 ui.label(status);
             }
-        });
 
-        // Bottom panel for live fan data (always visible)
-        egui::TopBottomPanel::bottom("live_fan_data")
-            .resizable(true)
-            .min_height(120.0)
-            .show(ctx, |ui| {
-                ui.allocate_ui_with_layout(
-                    ui.available_size(),
-                    egui::Layout::top_down(egui::Align::Center),
-                    |ui| {
-                        ui.horizontal(|ui| {
-                            ui.heading("Live Fan Data");
-                        });
-
-                        ui.separator();
-
-                        // Live data display
-                        if let Some(ref data) = self.current_fan_data {
-                            ui.horizontal(|ui| {
-                                // Temperature and Fan Speed
-                                ui.vertical(|ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label("CPU Temp:");
-                                        match self.cpu_temp {
-                                            Some(t) => ui.colored_label(
-                                                temp_color(t),
-                                                format!("{:.1}°C", t),
-                                            ),
-                                            None => {
-                                                ui.colored_label(egui::Color32::GRAY, "Unavailable")
-                                            }
-                                        };
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label("GPU Temp:");
-                                        match self.gpu_temp {
-                                            Some(GpuReading::Value(t)) => ui.colored_label(
-                                                temp_color(t),
-                                                format!("{:.1}°C", t),
-                                            ),
-                                            Some(GpuReading::Asleep) => ui.colored_label(
-                                                egui::Color32::GRAY,
-                                                "Off (powered down)",
-                                            ),
-                                            _ => {
-                                                ui.colored_label(egui::Color32::GRAY, "Unavailable")
-                                            }
-                                        };
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label("Fan Speeds:");
-                                        if data.fan_speeds.is_empty() {
-                                            ui.colored_label(
-                                                egui::Color32::GRAY,
-                                                "No fans detected",
-                                            );
-                                        } else {
-                                            for (i, (_num, speed, label)) in
-                                                data.fan_speeds.iter().enumerate()
-                                            {
-                                                if i > 0 {
-                                                    ui.label(" | ");
-                                                }
-                                                ui.colored_label(
-                                                    if *speed > 2500 {
-                                                        egui::Color32::RED
-                                                    } else if *speed > 1500 {
-                                                        egui::Color32::YELLOW
-                                                    } else {
-                                                        egui::Color32::GREEN
-                                                    },
-                                                    format!("{}: {} RPM", label, speed),
-                                                );
-                                            }
-                                        }
-                                    });
-                                });
-
-                                ui.add_space(20.0);
-
-                                // Fan Duty and CPU Usage
-                                ui.vertical(|ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label("Fan Duty:");
-                                        // Each fan's duty when the daemon reports them
-                                        let duties: Vec<(Option<&str>, u16)> =
-                                            if self.fans.is_empty() {
-                                                vec![(None, data.fan_duty)]
-                                            } else {
-                                                self.fans
-                                                    .iter()
-                                                    .map(|f| (Some(f.label.as_str()), f.duty))
-                                                    .collect()
-                                            };
-                                        for (i, (label, duty)) in duties.into_iter().enumerate() {
-                                            if i > 0 {
-                                                ui.label(" | ");
-                                            }
-                                            let percent = duty / 100; // ten-thousandths → %
-                                            ui.colored_label(
-                                                if duty > 8000 {
-                                                    egui::Color32::RED
-                                                } else if duty > 5000 {
-                                                    egui::Color32::YELLOW
-                                                } else {
-                                                    egui::Color32::GREEN
-                                                },
-                                                match label {
-                                                    Some(label) => {
-                                                        format!("{}: {}%", label, percent)
-                                                    }
-                                                    None => format!("{}%", percent),
-                                                },
-                                            );
-                                        }
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label("CPU Usage:");
-                                        ui.colored_label(
-                                            if data.cpu_usage > 80.0 {
-                                                egui::Color32::RED
-                                            } else if data.cpu_usage > 50.0 {
-                                                egui::Color32::YELLOW
-                                            } else {
-                                                egui::Color32::GREEN
-                                            },
-                                            format!("{:.1}%", data.cpu_usage),
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label("GPU Usage:");
-                                        match self.gpu_usage {
-                                            Some(GpuReading::Value(u)) => ui.colored_label(
-                                                if u > 80.0 {
-                                                    egui::Color32::RED
-                                                } else if u > 50.0 {
-                                                    egui::Color32::YELLOW
-                                                } else {
-                                                    egui::Color32::GREEN
-                                                },
-                                                format!("{:.0}%", u),
-                                            ),
-                                            Some(GpuReading::Asleep) => ui.colored_label(
-                                                egui::Color32::GRAY,
-                                                "Off (powered down)",
-                                            ),
-                                            _ => {
-                                                ui.colored_label(egui::Color32::GRAY, "Unavailable")
-                                            }
-                                        };
-                                    });
-                                });
-
-                                ui.add_space(20.0);
-
-                                // Timestamp
-                                ui.vertical(|ui| {
-                                    ui.label("Last Update:");
-                                    ui.label(data.timestamp.format("%H:%M:%S").to_string());
-                                });
-                            });
-
-                            // (No progress bar; test mode removed)
-                        } else {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label("Collecting fan data...");
-                            });
-                        }
-                    },
-                );
             });
+        });
     }
 }
