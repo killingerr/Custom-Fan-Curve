@@ -29,8 +29,11 @@ curl -sSL https://raw.githubusercontent.com/tonysystem76/Fan-Curve-App/main/inst
 
 2. **Run the installation script:**
    ```bash
-   ./install.sh
+   ./install.sh --local
    ```
+   `--local` builds and installs this checkout, including any changes you've
+   made. Without it, the script downloads and installs the latest code from
+   GitHub instead.
 
 3. **Launch the application:**
    ```bash

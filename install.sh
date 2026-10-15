@@ -24,6 +24,8 @@ DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons"
 REPO_URL="https://github.com/tonysystem76/Fan-Curve-App.git"
 TEMP_DIR="/tmp/fan-curve-app-install"
+# Checkout this script lives in, built by --local
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Functions
 print_header() {
@@ -151,6 +153,18 @@ download_and_build() {
     print_status "Building application (this may take a few minutes)..."
     cargo build --release
     
+    print_success "Application built successfully"
+}
+
+build_local() {
+    print_step "Building $APP_NAME from $SCRIPT_DIR..."
+
+    # Later steps read data/ and assets/ relative to the source tree
+    cd "$SCRIPT_DIR"
+
+    print_status "Building application (this may take a few minutes)..."
+    cargo build --release
+
     print_success "Application built successfully"
 }
 
@@ -374,11 +388,14 @@ show_usage() {
     echo "  --no-gui         Skip desktop entry creation"
     echo "  --no-deps        Skip dependency installation"
     echo "  --no-icon        Skip icon installation"
+    echo "  --local          Build and install this checkout, including"
+    echo "                   uncommitted changes, instead of cloning GitHub"
     echo ""
     echo "Examples:"
     echo "  $0                    # Full system installation"
     echo "  $0 --no-gui          # Install without desktop entry"
     echo "  $0 --no-deps         # Skip dependency installation"
+    echo "  $0 --local           # Install the code in this folder"
 }
 
 show_completion_message() {
@@ -426,6 +443,7 @@ main() {
     local skip_gui=false
     local skip_deps=false
     local skip_icon=false
+    local local_build=false
     
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
@@ -446,6 +464,10 @@ main() {
                 skip_icon=true
                 shift
                 ;;
+            --local)
+                local_build=true
+                shift
+                ;;
             *)
                 print_error "Unknown option: $1"
                 show_usage
@@ -463,7 +485,11 @@ main() {
         install_dependencies
     fi
     
-    download_and_build
+    if [ "$local_build" = true ]; then
+        build_local
+    else
+        download_and_build
+    fi
     install_application
     setup_configuration
     install_daemon
