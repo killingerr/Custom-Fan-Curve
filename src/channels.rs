@@ -11,6 +11,13 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// How often to look for GPU temperature sources again while none are found,
+/// e.g. because the daemon started before the GPU driver loaded.
+const GPU_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
+/// How long to stop calling nvidia-smi after it fails.
+const NVIDIA_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
 /// hwmon name of the Thelio Io 2 driver, whose channel wiring is fixed.
 const THELIO_IO_2: &str = "system76_thelio_io";
@@ -317,10 +324,20 @@ pub struct GpuTemp {
     nvidia: bool,
     /// NVIDIA PCI devices, to check whether they are powered down.
     nvidia_devices: Vec<PathBuf>,
+    /// When the sources were last looked for
+    scanned_at: Instant,
+    /// After an nvidia-smi failure, it isn't called again until this time.
+    nvidia_paused_until: Option<Instant>,
 }
 
 impl GpuTemp {
     pub fn discover() -> Self {
+        let gpu = Self::scan();
+        gpu.log_sources();
+        gpu
+    }
+
+    fn scan() -> Self {
         let amdgpus: Vec<PathBuf> = fs::read_dir("/sys/class/hwmon")
             .map(|entries| {
                 entries
@@ -349,16 +366,44 @@ impl GpuTemp {
             })
             .unwrap_or_default();
 
-        info!(
-            "GPU temperature sources: {} amdgpu, nvidia-smi {}",
-            amdgpus.len(),
-            if nvidia { "enabled" } else { "not present" }
-        );
         Self {
             amdgpus,
             nvidia,
             nvidia_devices,
+            scanned_at: Instant::now(),
+            nvidia_paused_until: None,
         }
+    }
+
+    fn log_sources(&self) {
+        info!(
+            "GPU temperature sources: {} amdgpu, nvidia-smi {}",
+            self.amdgpus.len(),
+            if self.nvidia {
+                "enabled"
+            } else {
+                "not present"
+            }
+        );
+    }
+
+    /// Look for sources again if none were found, every GPU_RESCAN_INTERVAL.
+    fn rescan_if_missing(&mut self) {
+        if !self.amdgpus.is_empty()
+            || self.nvidia
+            || self.scanned_at.elapsed() < GPU_RESCAN_INTERVAL
+        {
+            return;
+        }
+        *self = Self::scan();
+        if !self.amdgpus.is_empty() || self.nvidia {
+            self.log_sources();
+        }
+    }
+
+    fn nvidia_paused(&self) -> bool {
+        self.nvidia_paused_until
+            .is_some_and(|until| Instant::now() < until)
     }
 
     /// True when every NVIDIA GPU is runtime-suspended (e.g. the discrete GPU
@@ -374,6 +419,7 @@ impl GpuTemp {
 
     /// Hottest GPU temperature.
     pub fn read(&mut self) -> GpuReading {
+        self.rescan_if_missing();
         let amd = self
             .amdgpus
             .iter()
@@ -388,13 +434,20 @@ impl GpuTemp {
             // nvidia-smi would wake the GPU every second and drain the battery.
             asleep = true;
             Vec::new()
+        } else if self.nvidia_paused() {
+            Vec::new()
         } else {
             match nvidia_temperatures() {
                 Ok(temps) => temps,
                 Err(e) => {
-                    // Matches system76-power: stop calling nvidia-smi after a failure.
-                    warn!("Failed to read NVIDIA GPU temperature, disabling: {}", e);
-                    self.nvidia = false;
+                    // Back off rather than calling a failing nvidia-smi every
+                    // second, but retry so a driver reload doesn't disable it.
+                    warn!(
+                        "Failed to read NVIDIA GPU temperature, retrying in {}s: {}",
+                        NVIDIA_RETRY_INTERVAL.as_secs(),
+                        e
+                    );
+                    self.nvidia_paused_until = Some(Instant::now() + NVIDIA_RETRY_INTERVAL);
                     Vec::new()
                 }
             }
@@ -410,6 +463,7 @@ impl GpuTemp {
     /// Busiest GPU's usage in percent. Intel integrated GPUs don't report
     /// usage without root-only tools, so they aren't included.
     pub fn read_usage(&mut self) -> GpuReading {
+        self.rescan_if_missing();
         let amd = self
             .amdgpus
             .iter()
@@ -421,6 +475,8 @@ impl GpuTemp {
             Vec::new()
         } else if self.nvidia_asleep() {
             asleep = true;
+            Vec::new()
+        } else if self.nvidia_paused() {
             Vec::new()
         } else {
             nvidia_query("utilization.gpu").unwrap_or_else(|e| {

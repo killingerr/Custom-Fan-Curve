@@ -211,6 +211,10 @@ impl FanCurveDaemon {
 /// starts or gains claim support.
 const CLAIM_INTERVAL_TICKS: u32 = 5;
 
+/// How often the daemon looks for a Thelio Io board while none is found, in
+/// control loop ticks.
+const BOARD_RESCAN_TICKS: u32 = 5;
+
 /// Result of asking system76-power for fan control.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ClaimOutcome {
@@ -430,6 +434,11 @@ async fn run_control_loop(
                         claim = outcome;
                         publish_fan_control(connection, &status, &claim).await;
                     }
+                }
+
+                // The board's driver may load after the daemon starts at boot.
+                if board.is_none() && tick % BOARD_RESCAN_TICKS == 0 {
+                    board = IoBoard::discover();
                 }
 
                 // Read temperatures every tick, even when not writing the fans,
