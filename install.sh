@@ -71,15 +71,23 @@ check_requirements() {
         exit 1
     fi
     
+    # With rustup installed but no default toolchain, cargo exists but can't
+    # run anything
+    if command -v rustup &> /dev/null && ! cargo --version &> /dev/null; then
+        print_warning "rustup has no default Rust toolchain. Setting it to stable..."
+        rustup default stable
+    fi
+
     # Check if Rust is installed
     if ! command -v cargo &> /dev/null; then
         print_warning "Rust is not installed. Installing Rust..."
         install_rust
     else
         # Check Rust version
-        RUST_VERSION=$(cargo --version | cut -d' ' -f2 | cut -d'.' -f1-2)
-        REQUIRED_VERSION="1.75"
-        if [ "$(printf '%s\n' "$REQUIRED_VERSION" "$RUST_VERSION" | sort -V | head -n1)" != "$REQUIRED_VERSION" ]; then
+        RUST_VERSION=$(cargo --version 2>/dev/null | cut -d' ' -f2 | cut -d'.' -f1-2)
+        # egui 0.32 needs Rust 1.85
+        REQUIRED_VERSION="1.85"
+        if [ -z "$RUST_VERSION" ] || [ "$(printf '%s\n' "$REQUIRED_VERSION" "$RUST_VERSION" | sort -V | head -n1)" != "$REQUIRED_VERSION" ]; then
             print_warning "Rust version $RUST_VERSION is too old. Updating Rust..."
             install_rust
         else
@@ -92,9 +100,15 @@ check_requirements() {
 
 install_rust() {
     print_status "Installing/updating Rust..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    if command -v rustup &> /dev/null; then
+        rustup update stable
+        rustup default stable
+    else
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    fi
+    # Put rustup's cargo ahead of any older one installed by the system
     source "$HOME/.cargo/env"
-    print_success "Rust installed successfully"
+    print_success "Rust $(cargo --version | cut -d' ' -f2) is ready"
 }
 
 install_dependencies() {

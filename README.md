@@ -43,7 +43,7 @@ curl -sSL https://raw.githubusercontent.com/killingerr/Custom-Fan-Curve/main/ins
 
 - **Operating System:** Linux (tested on Ubuntu, Pop!_OS, Arch Linux)
 - **Hardware:** System76 desktop
-- **Dependencies:** Rust 1.75+, build tools, X11 libraries
+- **Dependencies:** Rust 1.85+, build tools, X11 libraries
 
 The installation script will automatically install all required dependencies.
 

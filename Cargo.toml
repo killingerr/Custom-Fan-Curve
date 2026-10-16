@@ -3,7 +3,7 @@ name = "fan-curve-app"
 version = "0.1.0"
 authors = ["Tony <tony@example.com>"]
 edition = "2021"
-rust-version = "1.75.0"
+rust-version = "1.85"
 
 [dependencies]
 chrono = "0.4"
