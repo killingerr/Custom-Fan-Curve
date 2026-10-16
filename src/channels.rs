@@ -557,12 +557,25 @@ impl GpuTemp {
     /// Busiest GPU's usage in percent. Intel integrated GPUs don't report
     /// usage without root-only tools, so they aren't included.
     pub fn read_usage(&mut self) -> GpuReading {
+        self.read_metric("device/gpu_busy_percent", 1.0, "utilization.gpu")
+    }
+
+    /// Fastest GPU's graphics clock in MHz.
+    pub fn read_clock(&mut self) -> GpuReading {
+        // amdgpu reports the shader clock in Hz
+        self.read_metric("freq1_input", 1e-6, "clocks.gr")
+    }
+
+    /// Highest value of an amdgpu hwmon file (times `amd_scale`) and an
+    /// nvidia-smi query field across GPUs, without waking sleeping ones.
+    fn read_metric(&mut self, amd_file: &str, amd_scale: f32, nvidia_field: &str) -> GpuReading {
         self.rescan_if_missing();
         let amd = self
             .amdgpus
             .iter()
-            .filter_map(|p| fs::read_to_string(p.join("device/gpu_busy_percent")).ok())
-            .filter_map(|s| s.trim().parse::<f32>().ok());
+            .filter_map(|p| fs::read_to_string(p.join(amd_file)).ok())
+            .filter_map(|s| s.trim().parse::<f32>().ok())
+            .map(|v| v * amd_scale);
 
         let mut asleep = false;
         let nvidia = if !self.nvidia {
@@ -573,14 +586,14 @@ impl GpuTemp {
         } else if self.nvidia_paused() {
             Vec::new()
         } else {
-            nvidia_query("utilization.gpu").unwrap_or_else(|e| {
-                debug!("Failed to read NVIDIA GPU usage: {}", e);
+            nvidia_query(nvidia_field).unwrap_or_else(|e| {
+                debug!("Failed to read NVIDIA {}: {}", nvidia_field, e);
                 Vec::new()
             })
         };
 
         match amd.chain(nvidia).reduce(f32::max) {
-            Some(u) => GpuReading::Value(u),
+            Some(v) => GpuReading::Value(v),
             None if asleep => GpuReading::Asleep,
             None => GpuReading::Unavailable,
         }

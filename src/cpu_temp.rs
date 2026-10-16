@@ -20,6 +20,30 @@ pub struct CpuTempSensor {
     pub sensor_name: String,
 }
 
+/// Average and highest current clock of the CPU cores in MHz, from cpufreq.
+pub fn cpu_clock_mhz() -> Option<(u32, u32)> {
+    let entries = fs::read_dir("/sys/devices/system/cpu").ok()?;
+    let khz: Vec<u64> = entries
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.strip_prefix("cpu")
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .filter_map(|e| fs::read_to_string(e.path().join("cpufreq/scaling_cur_freq")).ok())
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    clock_summary(&khz)
+}
+
+/// (average, highest) in MHz of per-core clocks in kHz.
+fn clock_summary(khz: &[u64]) -> Option<(u32, u32)> {
+    let max = *khz.iter().max()?;
+    let avg = khz.iter().sum::<u64>() / khz.len() as u64;
+    Some(((avg / 1000) as u32, (max / 1000) as u32))
+}
+
 /// CPU model name from /proc/cpuinfo, e.g. "AMD Ryzen 9 7950X 16-Core Processor"
 pub fn cpu_model_name() -> Option<String> {
     let cpuinfo = fs::read_to_string("/proc/cpuinfo").ok()?;
@@ -275,6 +299,15 @@ impl Default for CpuTempDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clock_summary_averages_cores_and_finds_the_fastest() {
+        assert_eq!(
+            clock_summary(&[613_954, 4_333_316, 3_000_000, 3_200_000]),
+            Some((2786, 4333))
+        );
+        assert_eq!(clock_summary(&[]), None);
+    }
 
     #[test]
     fn test_parse_model_name() {

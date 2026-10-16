@@ -37,6 +37,9 @@ pub struct FanCurveApp {
     cpu_temp: Option<f32>,
     gpu_temp: Option<GpuReading>,
     gpu_usage: Option<GpuReading>,
+    /// CPU clock (average, fastest core) and GPU clock, in MHz
+    cpu_clock: Option<(u32, u32)>,
+    gpu_clock: Option<GpuReading>,
     /// Local GPU reader: GPU usage, and temperature when the daemon can't
     /// report it
     local_gpu: Option<GpuTemp>,
@@ -247,6 +250,8 @@ impl FanCurveApp {
             cpu_temp: None,
             gpu_temp: None,
             gpu_usage: None,
+            cpu_clock: None,
+            gpu_clock: None,
             local_gpu: None,
             fans,
             selected_fan: 0,
@@ -357,7 +362,7 @@ impl FanCurveApp {
         };
 
         egui::Grid::new("live_readings")
-            .num_columns(4)
+            .num_columns(6)
             .spacing([24.0, 6.0])
             .show(ui, |ui| {
                 ui.label("CPU Temp:");
@@ -370,6 +375,13 @@ impl FanCurveApp {
                     usage_color(data.cpu_usage),
                     format!("{:.1}%", data.cpu_usage),
                 );
+                ui.label("CPU Clock:");
+                match self.cpu_clock {
+                    Some((avg, max)) => ui
+                        .label(format!("{} MHz", avg))
+                        .on_hover_text(format!("Average across cores; fastest core {} MHz", max)),
+                    None => ui.colored_label(egui::Color32::GRAY, "Unavailable"),
+                };
                 ui.end_row();
 
                 ui.label("GPU Temp:");
@@ -380,6 +392,9 @@ impl FanCurveApp {
                 show_gpu_reading(ui, self.gpu_usage, |u| {
                     (usage_color(u), format!("{:.0}%", u))
                 });
+                ui.label("GPU Clock:");
+                let plain = ui.visuals().text_color();
+                show_gpu_reading(ui, self.gpu_clock, |mhz| (plain, format!("{:.0} MHz", mhz)));
                 ui.end_row();
             });
 
@@ -1031,12 +1046,11 @@ impl eframe::App for FanCurveApp {
                         Some(self.local_gpu.get_or_insert_with(GpuTemp::discover).read());
                 }
             }
-            // Display only, so the GUI reads it itself rather than the daemon.
-            self.gpu_usage = Some(
-                self.local_gpu
-                    .get_or_insert_with(GpuTemp::discover)
-                    .read_usage(),
-            );
+            // Display only, so the GUI reads these itself rather than the daemon.
+            let gpu = self.local_gpu.get_or_insert_with(GpuTemp::discover);
+            self.gpu_usage = Some(gpu.read_usage());
+            self.gpu_clock = Some(gpu.read_clock());
+            self.cpu_clock = crate::cpu_temp::cpu_clock_mhz();
         }
 
         // No test mode state to manage
