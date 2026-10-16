@@ -17,6 +17,7 @@ pub mod gpu_info;
 pub mod logging;
 pub mod notifier;
 pub mod overheat;
+pub mod system_info;
 
 // DBus constants following System76 Power patterns
 pub const DBUS_SERVICE_NAME: &str = "com.system76.FanCurveDaemon";

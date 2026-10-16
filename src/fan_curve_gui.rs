@@ -33,6 +33,8 @@ pub struct FanCurveApp {
     cpu_model: Option<String>,
     /// GPU model names, read once at startup
     gpu_models: Vec<crate::gpu_info::GpuInfo>,
+    /// Model, motherboard, BIOS and fan board, read once at startup
+    system_info: crate::system_info::SystemInfo,
     /// Latest CPU and GPU temperatures for the Live Fan Data section
     cpu_temp: Option<f32>,
     gpu_temp: Option<GpuReading>,
@@ -247,6 +249,7 @@ impl FanCurveApp {
             fan_control_alert: None,
             cpu_model: crate::cpu_temp::cpu_model_name(),
             gpu_models: crate::gpu_info::detect_gpus(),
+            system_info: crate::system_info::SystemInfo::detect(),
             cpu_temp: None,
             gpu_temp: None,
             gpu_usage: None,
@@ -347,6 +350,44 @@ impl FanCurveApp {
             Ok(()) => self.set_status("Fan temperature sources saved".to_string()),
             Err(e) => self.set_status(format!("Daemon rejected fan settings: {}", e)),
         }
+    }
+
+    /// Model, motherboard, fan board and BIOS on one row
+    fn show_system_info(&self, ui: &mut egui::Ui) {
+        let info = &self.system_info;
+        ui.horizontal_wrapped(|ui| {
+            let mut first = true;
+            for (label, value) in [
+                ("Model:", &info.model),
+                ("Motherboard:", &info.motherboard),
+                ("Fan board:", &info.fan_board),
+                ("BIOS:", &info.bios),
+            ] {
+                if !first {
+                    ui.label("|");
+                }
+                first = false;
+                ui.label(label);
+                match value {
+                    Some(value) => {
+                        let response = ui.strong(value);
+                        if label == "BIOS:" {
+                            if let Some(vendor) = &info.bios_vendor {
+                                response.on_hover_text(vendor);
+                            }
+                        }
+                    }
+                    None => {
+                        let missing = if label == "Fan board:" {
+                            "None detected"
+                        } else {
+                            "Unknown"
+                        };
+                        ui.colored_label(egui::Color32::GRAY, missing);
+                    }
+                }
+            }
+        });
     }
 
     /// Temperatures, usage, and a row per fan with what it follows, its duty
@@ -1046,6 +1087,9 @@ impl eframe::App for FanCurveApp {
                         Some(self.local_gpu.get_or_insert_with(GpuTemp::discover).read());
                 }
             }
+            if self.system_info.fan_board.is_none() {
+                self.system_info.fan_board = crate::system_info::fan_board();
+            }
             // Display only, so the GUI reads these itself rather than the daemon.
             let gpu = self.local_gpu.get_or_insert_with(GpuTemp::discover);
             self.gpu_usage = Some(gpu.read_usage());
@@ -1063,6 +1107,7 @@ impl eframe::App for FanCurveApp {
             // Scrolls only when the window is too small for everything
             egui::ScrollArea::vertical().show(ui, |ui| {
             ui.heading("Fan Curve Control");
+            self.show_system_info(ui);
 
             // CPU manufacturer information
             if let Some(sensor_info) = self.fan_monitor.cpu_temp_detector().get_sensor_info() {
