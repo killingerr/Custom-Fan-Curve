@@ -29,6 +29,9 @@ pub enum Commands {
     /// Show desktop notifications for overheating and fan control problems
     /// (runs in the user's session; started at login by the installer)
     Notify,
+    /// Return System76 fans to automatic control (the daemon's service runs
+    /// this after it stops, even if it was killed)
+    RestoreFans,
     /// Fan curve management
     FanCurve {
         #[command(subcommand)]

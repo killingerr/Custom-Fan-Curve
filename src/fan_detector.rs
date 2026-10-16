@@ -1,7 +1,44 @@
 use crate::errors::Result;
 use log::{debug, error, info, warn};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// hwmon devices whose fans this app may have switched to manual control:
+/// System76 laptops (system76, system76_acpi) and Thelio Io boards.
+const SYSTEM76_FAN_HWMON: [&str; 4] = [
+    "system76",
+    "system76_acpi",
+    "system76_io",
+    "system76_thelio_io",
+];
+
+/// Return the fans of every System76 hwmon device under `root` (normally
+/// /sys/class/hwmon) to automatic control by writing 2 to each pwmN_enable.
+/// Returns the files written; boards without enable files are left alone.
+pub fn restore_automatic(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut written = Vec::new();
+    for hwmon in entries.flatten().map(|e| e.path()) {
+        let is_system76 = fs::read_to_string(hwmon.join("name"))
+            .is_ok_and(|name| SYSTEM76_FAN_HWMON.contains(&name.trim()));
+        if !is_system76 {
+            continue;
+        }
+        for n in 1..=8 {
+            let enable = hwmon.join(format!("pwm{}_enable", n));
+            if !enable.exists() {
+                continue;
+            }
+            match fs::write(&enable, "2") {
+                Ok(()) => written.push(enable),
+                Err(e) => warn!("Failed to write {}: {}", enable.display(), e),
+            }
+        }
+    }
+    written
+}
 
 /// Fan sensor information
 #[derive(Debug, Clone)]
@@ -349,6 +386,35 @@ impl Default for FanDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restore_automatic_resets_only_system76_fans() {
+        let root = std::env::temp_dir().join(format!("fan_restore_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let hwmon = |name: &str, dev: &str, enables: &[u8]| {
+            let dir = root.join(dev);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("name"), format!("{}\n", name)).unwrap();
+            for n in enables {
+                fs::write(dir.join(format!("pwm{}_enable", n)), "1").unwrap();
+            }
+            dir
+        };
+        let laptop = hwmon("system76_acpi", "hwmon0", &[1, 2]);
+        let thelio = hwmon("system76_thelio_io", "hwmon1", &[]);
+        let other = hwmon("nct6775", "hwmon2", &[1]);
+
+        let written = restore_automatic(&root);
+        assert_eq!(written.len(), 2);
+        for n in [1, 2] {
+            let value = fs::read_to_string(laptop.join(format!("pwm{}_enable", n))).unwrap();
+            assert_eq!(value, "2");
+        }
+        // Thelio Io 2 has no enable files; other hardware is untouched
+        assert!(!thelio.join("pwm1_enable").exists());
+        assert_eq!(fs::read_to_string(other.join("pwm1_enable")).unwrap(), "1");
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn test_fan_detector_creation() {

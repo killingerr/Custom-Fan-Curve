@@ -34,6 +34,19 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if let Some(fan_curve_app::args::Commands::RestoreFans) = args.command {
+        let written = fan_curve_app::fan_detector::restore_automatic(std::path::Path::new(
+            "/sys/class/hwmon",
+        ));
+        for path in &written {
+            println!("Automatic fan control: {}", path.display());
+        }
+        if written.is_empty() {
+            println!("No System76 fan controls to restore");
+        }
+        return Ok(());
+    }
+
     if let Some(fan_curve_app::args::Commands::Notify) = args.command {
         fan_curve_app::notifier::run()
             .await

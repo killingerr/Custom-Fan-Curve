@@ -487,25 +487,33 @@ async fn run_control_loop(
         }
     }
 
-    match claim {
-        // system76-power returns the fans to automatic control on release, then
-        // resumes its curve; only fall back to doing it ourselves if that fails.
-        ClaimOutcome::Granted if release_fan_control(connection).await => return,
-        // The fans belong to the other claimant or system76-power's curve;
-        // this daemon hasn't been writing them, so leave them alone.
-        ClaimOutcome::HeldByOther | ClaimOutcome::Failed(_) => return,
-        _ => {}
+    let released = claim == ClaimOutcome::Granted && release_fan_control(connection).await;
+    if !restore_fans_on_exit(&claim, released, board.is_some()) {
+        return;
     }
 
+    info!("Returning fans to automatic control");
     if let Some(board) = &board {
-        info!("Returning fans to automatic control");
         board.set_automatic();
     } else if fan_detector.is_initialized() {
-        info!("Returning fans to automatic control");
         if let Err(e) = fan_detector.set_duty(None) {
             warn!("Failed to return fans to automatic control: {}", e);
         }
     }
+}
+
+/// Whether the daemon must return the fans it drove to automatic control
+/// itself when it stops.
+fn restore_fans_on_exit(claim: &ClaimOutcome, released: bool, thelio_board: bool) -> bool {
+    // Under another claimant or system76-power's curve this daemon never
+    // wrote the fans, so they aren't its to touch.
+    if !claim.may_write() {
+        return false;
+    }
+    // On release system76-power returns Thelio Io boards to automatic and
+    // resumes its curve. It doesn't manage laptop fans, so those are always
+    // handed back to the firmware here.
+    !(thelio_board && released)
 }
 
 /// Current CPU temperature (°C), or None if it can't be read.
@@ -1090,5 +1098,49 @@ impl FanCurveDaemon {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn laptop_fans_are_handed_back_even_after_releasing_the_claim() {
+        assert!(restore_fans_on_exit(&ClaimOutcome::Granted, true, false));
+        assert!(restore_fans_on_exit(
+            &ClaimOutcome::NotRunning,
+            false,
+            false
+        ));
+        assert!(restore_fans_on_exit(
+            &ClaimOutcome::Unsupported,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn thelio_fans_are_left_to_system76_power_once_released() {
+        assert!(!restore_fans_on_exit(&ClaimOutcome::Granted, true, true));
+        // Release failed: nothing resumes them, so the daemon does
+        assert!(restore_fans_on_exit(&ClaimOutcome::Granted, false, true));
+        assert!(restore_fans_on_exit(&ClaimOutcome::NotRunning, false, true));
+    }
+
+    #[test]
+    fn fans_the_daemon_never_wrote_are_left_alone() {
+        for thelio in [false, true] {
+            assert!(!restore_fans_on_exit(
+                &ClaimOutcome::HeldByOther,
+                false,
+                thelio
+            ));
+            assert!(!restore_fans_on_exit(
+                &ClaimOutcome::Failed("polkit".to_string()),
+                false,
+                thelio
+            ));
+        }
     }
 }

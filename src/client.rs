@@ -51,8 +51,8 @@ impl FanCurveClient {
     /// Handle CLI commands
     pub async fn handle_args(&self, args: Args) -> Result<()> {
         match args.command {
-            Some(Commands::Daemon | Commands::Notify) => {
-                error!("Daemon and notify commands should not be handled by client");
+            Some(Commands::Daemon | Commands::Notify | Commands::RestoreFans) => {
+                error!("Daemon, notify and restore-fans commands should not be handled by client");
                 Err(FanCurveError::Unknown(
                     "Invalid command for client".to_string(),
                 ))

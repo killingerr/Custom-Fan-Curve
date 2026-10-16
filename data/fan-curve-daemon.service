@@ -6,6 +6,9 @@ After=dbus.service
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/fan-curve-app daemon
+# Runs after every stop, including kill -9 and crashes, so fans the daemon
+# switched to manual control go back to the firmware. "-": never fail the unit.
+ExecStopPost=-/usr/local/bin/fan-curve-app restore-fans
 Environment=FAN_CURVE_APP_CONFIG=/etc/fan-curve-app/config.json
 Restart=on-failure
 RestartSec=2
