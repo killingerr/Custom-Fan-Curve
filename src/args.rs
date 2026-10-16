@@ -31,7 +31,11 @@ pub enum Commands {
     Notify,
     /// Return System76 fans to automatic control (the daemon's service runs
     /// this after it stops, even if it was killed)
-    RestoreFans,
+    RestoreFans {
+        /// Where to find hwmon devices (tests point this at fake devices)
+        #[arg(long, default_value = "/sys/class/hwmon", hide = true)]
+        hwmon_root: std::path::PathBuf,
+    },
     /// Fan curve management
     FanCurve {
         #[command(subcommand)]
