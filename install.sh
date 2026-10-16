@@ -240,21 +240,65 @@ install_daemon() {
     fi
 }
 
-check_system76_power() {
-    # system76-power only drives the fans on Thelio Io boards, so a version
-    # without ClaimFanControl only conflicts with the daemon there.
+# Pop!_OS staging repository with the system76-power build that can hand fan
+# control to this app (ClaimFanControl, pop-os/system76-power PR #495), until a
+# release includes it
+S76_POWER_REPO="popdev:testing-system76-power-pr495"
+S76_POWER_REPO_ID="popdev-testing-system76-power-pr495"
+
+# Whether the installed system76-power can hand fan control to this app
+system76_power_can_claim() {
+    if busctl --system introspect com.system76.PowerDaemon /com/system76/PowerDaemon \
+            com.system76.PowerDaemon 2> /dev/null | grep -q ClaimFanControl; then
+        return 0
+    fi
+    # The service may not be running; check the program itself
+    grep -qa ClaimFanControl /usr/bin/system76-power 2> /dev/null
+}
+
+ensure_system76_power() {
+    # system76-power only drives the fans on Thelio Io boards, so an older
+    # version only conflicts with the daemon there.
     if ! grep -qsx -e system76_thelio_io -e system76_io /sys/class/hwmon/*/name; then
         return 0
     fi
-    if ! busctl status com.system76.PowerDaemon > /dev/null 2>&1; then
+    print_step "Checking system76-power..."
+    if system76_power_can_claim; then
+        print_success "system76-power supports handing over fan control"
         return 0
     fi
-    if ! busctl introspect com.system76.PowerDaemon /com/system76/PowerDaemon \
-            com.system76.PowerDaemon 2> /dev/null | grep -q ClaimFanControl; then
-        print_warning "This system76-power can't hand over fan control (no ClaimFanControl)."
-        print_warning "Its fan curve and this app's will both set the fans until it is"
-        print_warning "updated to a version with fan control claim support."
+
+    print_warning "This system76-power can't hand over fan control (no ClaimFanControl)."
+    local os_id="" os_codename=""
+    if [ -f /etc/os-release ]; then
+        os_id=$(. /etc/os-release && echo "$ID")
+        os_codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
     fi
+    if [ "$os_id" = pop ] && [ "$os_codename" = noble ] && command -v apt-manage &> /dev/null; then
+        print_status "Installing system76-power from $S76_POWER_REPO..."
+        if sudo apt-manage add -y "$S76_POWER_REPO" \
+                && sudo apt-get update \
+                && sudo apt-get install -y system76-power; then
+            sudo systemctl restart com.system76.PowerDaemon || true
+            sleep 2
+            if system76_power_can_claim; then
+                print_success "Installed system76-power $(dpkg-query -W -f='${Version}' system76-power)"
+                return 0
+            fi
+        else
+            # Don't leave a repository behind that apt can't use
+            sudo apt-manage remove "$S76_POWER_REPO_ID" &> /dev/null || true
+            sudo apt-get update &> /dev/null || true
+        fi
+        print_warning "Couldn't install a system76-power that supports fan control claim."
+    else
+        print_warning "Automatic system76-power install needs Pop!_OS 24.04."
+    fi
+    print_warning "Until it's updated, system76-power and this app will both set the fans."
+    print_warning "To build it from source:"
+    print_warning "  git clone -b fan-control-claim-pr https://github.com/tonysystem76/system76-power.git"
+    print_warning "  cd system76-power && make && sudo make install"
+    print_warning "  sudo systemctl restart com.system76.PowerDaemon"
 }
 
 install_notifier() {
@@ -404,6 +448,9 @@ show_usage() {
     echo "  --no-icon        Skip icon installation"
     echo "  --local          Build and install this checkout, including"
     echo "                   uncommitted changes, instead of cloning GitHub"
+    echo "  --no-system76-power"
+    echo "                   Don't install a system76-power that can hand over"
+    echo "                   fan control on Thelio Io systems"
     echo ""
     echo "Examples:"
     echo "  $0                    # Full system installation"
@@ -458,6 +505,7 @@ main() {
     local skip_deps=false
     local skip_icon=false
     local local_build=false
+    local skip_s76_power=false
     
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
@@ -480,6 +528,10 @@ main() {
                 ;;
             --local)
                 local_build=true
+                shift
+                ;;
+            --no-system76-power)
+                skip_s76_power=true
                 shift
                 ;;
             *)
@@ -506,8 +558,10 @@ main() {
     fi
     install_application
     setup_configuration
+    if [ "$skip_s76_power" = false ]; then
+        ensure_system76_power
+    fi
     install_daemon
-    check_system76_power
     
     if [ "$skip_icon" = false ]; then
         install_icon

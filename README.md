@@ -44,6 +44,10 @@ curl -sSL https://raw.githubusercontent.com/killingerr/Custom-Fan-Curve/main/ins
 - **Operating System:** Linux (tested on Ubuntu, Pop!_OS, Arch Linux)
 - **Hardware:** System76 desktop
 - **Dependencies:** Rust 1.85+, build tools, X11 libraries
+- **system76-power with fan control claim support** on Thelio desktops with a
+  Thelio Io board, so it hands the fans over to this app. On Pop!_OS 24.04 the
+  installer adds it from the `popdev:testing-system76-power-pr495` repository
+  when the installed version doesn't have it (skip with `--no-system76-power`).
 
 The installation script will automatically install all required dependencies.
 
