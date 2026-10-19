@@ -5,7 +5,7 @@ use crate::cpu_temp::CpuTempDetector;
 use crate::errors::{FanCurveError, Result};
 use crate::fan_detector::FanDetector;
 use chrono::{DateTime, Local};
-use log::{info, warn};
+use log::warn;
 use std::fs;
 use std::sync::Mutex;
 
@@ -20,6 +20,7 @@ pub struct FanDataPoint {
 }
 
 /// Reads the CPU temperature sensor and fans directly
+#[derive(Default)]
 pub struct FanMonitor {
     current_fan_curve: Option<crate::fan::FanCurve>,
     cpu_temp_detector: CpuTempDetector,
@@ -31,27 +32,17 @@ pub struct FanMonitor {
 
 impl FanMonitor {
     pub fn new() -> Self {
-        Self {
-            current_fan_curve: None,
-            cpu_temp_detector: CpuTempDetector::new(),
-            fan_detector: FanDetector::new(),
-            prev_cpu_times: Mutex::new(None),
-        }
+        Self::default()
     }
 
-    /// Detect the CPU temperature sensor and fans
-    pub fn initialize(&mut self) -> Result<()> {
+    /// Detect the CPU temperature sensor and fans; either may be missing
+    pub fn initialize(&mut self) {
         if let Err(e) = self.cpu_temp_detector.initialize() {
             warn!("Failed to initialize CPU temperature detection: {}", e);
         }
         if let Err(e) = self.fan_detector.initialize() {
             warn!("Failed to initialize fan detection: {}", e);
         }
-        info!(
-            "Fan monitor initialized with {} fans detected",
-            self.fan_detector.fan_count()
-        );
-        Ok(())
     }
 
     /// Curve used to show the duty the fans would run at
@@ -71,11 +62,8 @@ impl FanMonitor {
             ));
         }
         let temperature = self.cpu_temp_detector.read_temperature()?;
-        let fan_speeds = if self.fan_detector.is_initialized() {
-            self.fan_detector.read_all_fan_speeds()?
-        } else {
-            Vec::new()
-        };
+        // Empty when no fans were detected
+        let fan_speeds = self.fan_detector.read_all_fan_speeds()?;
         let fan_duty = self
             .current_fan_curve
             .as_ref()
@@ -92,40 +80,27 @@ impl FanMonitor {
 
     /// CPU usage in percent since the previous call (since boot on the first)
     pub fn read_cpu_usage(&self) -> Result<f32> {
-        let stat_content = fs::read_to_string("/proc/stat").map_err(FanCurveError::Io)?;
-        let current = parse_cpu_times(&stat_content)?;
+        let current = parse_cpu_times(&fs::read_to_string("/proc/stat")?)?;
         let previous = self.prev_cpu_times.lock().unwrap().replace(current);
         Ok(cpu_usage_between(previous.unwrap_or((0, 0)), current))
     }
 }
 
-impl Default for FanMonitor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Aggregate CPU times from /proc/stat as (idle, total), in clock ticks.
 fn parse_cpu_times(stat_content: &str) -> Result<(u64, u64)> {
-    let first_line = stat_content
+    let invalid = || FanCurveError::Config("Invalid /proc/stat format".to_string());
+    // cpu user nice system idle iowait irq softirq steal ...
+    let fields: Vec<u64> = stat_content
         .lines()
         .next()
-        .ok_or_else(|| crate::errors::FanCurveError::Config("Empty /proc/stat".to_string()))?;
-
-    // cpu user nice system idle iowait irq softirq steal ...
-    let fields: Vec<u64> = first_line
+        .ok_or_else(invalid)?
         .split_whitespace()
         .skip(1)
         .take(8)
-        .map(|f| f.parse())
-        .collect::<std::result::Result<_, _>>()
-        .map_err(|_| {
-            crate::errors::FanCurveError::Config("Invalid /proc/stat format".to_string())
-        })?;
+        .map(|f| f.parse().map_err(|_| invalid()))
+        .collect::<Result<_>>()?;
     if fields.len() < 7 {
-        return Err(crate::errors::FanCurveError::Config(
-            "Invalid /proc/stat format".to_string(),
-        ));
+        return Err(invalid());
     }
 
     let idle = fields[3] + fields[4]; // idle + iowait

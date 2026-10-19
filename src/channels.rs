@@ -39,19 +39,6 @@ pub enum TempSource {
 impl TempSource {
     pub const ALL: [TempSource; 3] = [TempSource::Cpu, TempSource::Gpu, TempSource::Hottest];
 
-    /// Short name for CLI and logs.
-    pub fn id(self) -> &'static str {
-        match self {
-            TempSource::Cpu => "cpu",
-            TempSource::Gpu => "gpu",
-            TempSource::Hottest => "hottest",
-        }
-    }
-
-    pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|s| s.id() == id)
-    }
-
     pub fn label(self) -> &'static str {
         match self {
             TempSource::Cpu => "CPU",
@@ -531,7 +518,7 @@ impl GpuTemp {
         } else if self.nvidia_paused() {
             Vec::new()
         } else {
-            match nvidia_temperatures() {
+            match nvidia_query("temperature.gpu") {
                 Ok(temps) => temps,
                 Err(e) => {
                     // Back off rather than calling a failing nvidia-smi every
@@ -598,11 +585,6 @@ impl GpuTemp {
             None => GpuReading::Unavailable,
         }
     }
-}
-
-/// Temperatures in °C of every NVIDIA GPU, via nvidia-smi.
-fn nvidia_temperatures() -> std::io::Result<Vec<f32>> {
-    nvidia_query("temperature.gpu")
 }
 
 /// One numeric nvidia-smi query field for every NVIDIA GPU.
@@ -764,14 +746,6 @@ mod tests {
         fan.update(0, 3000, start + Duration::from_secs(10));
         fan.update(0, 3000, start + Duration::from_secs(12));
         assert!(!fan.is_missing());
-    }
-
-    #[test]
-    fn temp_source_ids_round_trip() {
-        for source in TempSource::ALL {
-            assert_eq!(TempSource::from_id(source.id()), Some(source));
-        }
-        assert_eq!(TempSource::from_id("bogus"), None);
     }
 
     #[test]
