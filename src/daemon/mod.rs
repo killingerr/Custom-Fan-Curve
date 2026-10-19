@@ -4,7 +4,7 @@ use crate::{
     alerts::fan_control,
     channels::{ChannelAssignment, GpuReading, GpuTemp, IoBoard, TempSource},
     cpu_temp::CpuTempDetector,
-    errors::{zbus_error_from_display, FanCurveError, Result},
+    errors::{FanCurveError, Result},
     fan::{FanCurve, FanCurveConfig},
     fan_detector::FanDetector,
     overheat::OverheatGuard,
@@ -13,6 +13,7 @@ use crate::{
 use log::{debug, error, info, warn};
 use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration};
+use zbus::fdo::Error::Failed;
 use zbus::{dbus_interface, ConnectionBuilder, SignalContext};
 
 const SYSTEM76_POWER_SERVICE: &str = "com.system76.PowerDaemon";
@@ -69,12 +70,9 @@ impl FanCurveDaemon {
             initial_index
         );
 
-        let config = Arc::new(Mutex::new(loaded));
-        let current_curve_index = Arc::new(Mutex::new(initial_index));
-
         Ok(Self {
-            config,
-            current_curve_index,
+            config: Arc::new(Mutex::new(loaded)),
+            current_curve_index: Arc::new(Mutex::new(initial_index)),
             status: Arc::new(Mutex::new(DaemonStatus {
                 fan_control: (fan_control::STARTING.to_string(), String::new()),
                 ..Default::default()
@@ -97,78 +95,29 @@ impl FanCurveDaemon {
         }
     }
 
-    /// Save configuration to file with proper error handling
-    fn save_config_internal(&self) -> Result<()> {
+    /// Index of the curve called `name`
+    fn curve_index(&self, name: &str) -> zbus::fdo::Result<usize> {
         let config = self.config.lock().unwrap();
-        let config_path = FanCurveConfig::get_config_path();
+        config
+            .curves
+            .iter()
+            .position(|c| c.name() == name)
+            .ok_or_else(|| Failed(format!("Fan curve not found: {}", name)))
+    }
 
-        // Ensure the directory exists
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                error!("Failed to create config directory: {}", e);
-                FanCurveError::Io(e)
+    /// Persist the in-memory config, reporting failure as a DBus error
+    fn save(&self) -> zbus::fdo::Result<()> {
+        let path = FanCurveConfig::get_config_path();
+        self.config
+            .lock()
+            .unwrap()
+            .save_to_file(&path)
+            .map_err(|e| {
+                error!("Failed to save config: {}", e);
+                Failed(format!("Failed to save config: {}", e))
             })?;
-        }
-
-        // Create a temporary file first, then rename for atomic operation
-        let temp_path = config_path.with_extension("tmp");
-
-        // Save to temporary file
-        config.save_to_file(&temp_path).map_err(|e| {
-            error!("Failed to save config to temp file: {}", e);
-            FanCurveError::Config(format!("Failed to save config: {}", e))
-        })?;
-
-        // Atomically rename temp file to final location
-        std::fs::rename(&temp_path, &config_path).map_err(|e| {
-            error!("Failed to rename temp config file: {}", e);
-            // Try to clean up temp file
-            let _ = std::fs::remove_file(&temp_path);
-            FanCurveError::Io(e)
-        })?;
-
-        info!(
-            "Configuration saved successfully to: {}",
-            config_path.display()
-        );
+        info!("Configuration saved to {}", path.display());
         Ok(())
-    }
-
-    /// Ensure configuration is saved with retry logic
-    fn ensure_config_saved(&self) -> Result<()> {
-        let mut retries = 3;
-        while retries > 0 {
-            match self.save_config_internal() {
-                Ok(()) => {
-                    // Validate persistence after successful save
-                    if let Err(e) = self.validate_persistence() {
-                        error!("Persistence validation failed: {}", e);
-                        // Don't fail the save operation, but log the issue
-                    }
-                    return Ok(());
-                }
-                Err(e) => {
-                    retries -= 1;
-                    if retries > 0 {
-                        error!(
-                            "Failed to save config, retrying... ({} attempts left): {}",
-                            retries, e
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                    } else {
-                        error!("Failed to save config after all retries: {}", e);
-                        return Err(e);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Validate that configuration persists correctly
-    fn validate_persistence(&self) -> Result<()> {
-        let config = self.config.lock().unwrap();
-        config.validate_persistence()
     }
 
     /// Run the daemon: serve the DBus interface and drive the fan control loop
@@ -685,7 +634,7 @@ impl FanCurveDaemon {
         debug!("Getting current fan curve");
         let config = self.config.lock().unwrap();
         if config.curves.is_empty() {
-            return Err(zbus_error_from_display("No fan curves configured"));
+            return Err(Failed("No fan curves configured".into()));
         }
         let current_index =
             (*self.current_curve_index.lock().unwrap()).min(config.curves.len() - 1);
@@ -700,23 +649,17 @@ impl FanCurveDaemon {
     ) -> zbus::fdo::Result<()> {
         debug!("Setting fan curve to index {}", index);
         let curve_name = {
-            let mut current_index = self.current_curve_index.lock().unwrap();
             let config = self.config.lock().unwrap();
-
-            if index as usize >= config.curves.len() {
-                return Err(zbus_error_from_display("Invalid fan curve index"));
-            }
-
-            *current_index = index as usize;
-            config.curves[*current_index].name().to_string()
+            let curve = config
+                .curves
+                .get(index as usize)
+                .ok_or_else(|| Failed("Invalid fan curve index".into()))?;
+            *self.current_curve_index.lock().unwrap() = index as usize;
+            curve.name().to_string()
         };
 
         info!("Fan curve set to: {}", curve_name);
-
-        if let Err(e) = Self::fan_curve_changed(&ctxt).await {
-            warn!("Failed to emit FanCurveChanged signal: {}", e);
-        }
-
+        emit_curve_changed(&ctxt).await;
         Ok(())
     }
 
@@ -727,29 +670,12 @@ impl FanCurveDaemon {
         #[zbus(signal_context)] ctxt: SignalContext<'_>,
     ) -> zbus::fdo::Result<()> {
         debug!("Setting fan curve to name: {}", name);
-        let found = {
-            let config = self.config.lock().unwrap();
-            config.curves.iter().position(|c| c.name() == name)
-        };
+        let index = self.curve_index(name)?;
+        *self.current_curve_index.lock().unwrap() = index;
 
-        if let Some(index) = found {
-            {
-                let mut current_index = self.current_curve_index.lock().unwrap();
-                *current_index = index;
-            }
-            info!("Fan curve set to: {}", name);
-
-            if let Err(e) = Self::fan_curve_changed(&ctxt).await {
-                warn!("Failed to emit FanCurveChanged signal: {}", e);
-            }
-
-            Ok(())
-        } else {
-            Err(zbus_error_from_display(format!(
-                "Fan curve not found: {}",
-                name
-            )))
-        }
+        info!("Fan curve set to: {}", name);
+        emit_curve_changed(&ctxt).await;
+        Ok(())
     }
 
     /// Set the persistent default fan curve (survives reboots) and activate it now.
@@ -759,43 +685,13 @@ impl FanCurveDaemon {
         #[zbus(signal_context)] ctxt: SignalContext<'_>,
     ) -> zbus::fdo::Result<()> {
         debug!("Setting default fan curve to: {}", name);
-        let index = {
-            let config = self.config.lock().unwrap();
-            config.curves.iter().position(|c| c.name() == name)
-        };
+        let index = self.curve_index(name)?;
+        self.config.lock().unwrap().default_curve_index = Some(index);
+        *self.current_curve_index.lock().unwrap() = index;
+        self.save()?;
 
-        let Some(index) = index else {
-            return Err(zbus_error_from_display(format!(
-                "Fan curve not found: {}",
-                name
-            )));
-        };
-
-        {
-            let mut config = self.config.lock().unwrap();
-            let mut current = self.current_curve_index.lock().unwrap();
-            config.default_curve_index = Some(index);
-            *current = index;
-        }
-
-        if let Err(e) = self.ensure_config_saved() {
-            error!("Failed to save config after setting default: {}", e);
-            return Err(zbus_error_from_display(format!(
-                "Failed to save config: {}",
-                e
-            )));
-        }
-
-        info!(
-            "Default fan curve set to '{}' and persisted to {}",
-            name,
-            FanCurveConfig::get_config_path().display()
-        );
-
-        if let Err(e) = Self::fan_curve_changed(&ctxt).await {
-            warn!("Failed to emit FanCurveChanged signal: {}", e);
-        }
-
+        info!("Default fan curve set to '{}'", name);
+        emit_curve_changed(&ctxt).await;
         Ok(())
     }
 
@@ -803,7 +699,7 @@ impl FanCurveDaemon {
     async fn get_default_fan_curve(&self) -> zbus::fdo::Result<FanCurve> {
         let config = self.config.lock().unwrap();
         if config.curves.is_empty() {
-            return Err(zbus_error_from_display("No fan curves configured"));
+            return Err(Failed("No fan curves configured".into()));
         }
         let index = config
             .default_curve_index
@@ -823,44 +719,26 @@ impl FanCurveDaemon {
         debug!("Adding fan curve point: {}°C -> {}%", temp, duty);
 
         if !(0..=100).contains(&temp) || duty > 100 {
-            return Err(zbus_error_from_display("Invalid fan curve point values"));
+            return Err(Failed("Invalid fan curve point values".into()));
         }
 
-        let valid_index = {
+        {
             let mut config = self.config.lock().unwrap();
-            let current_index = self.current_curve_index.lock().unwrap();
-
-            if *current_index < config.curves.len() {
-                if config.curves[*current_index].is_builtin() {
-                    return Err(zbus_error_from_display(BUILTIN_READ_ONLY));
-                }
-                config.curves[*current_index].add_point(temp, duty * 100);
-                true
-            } else {
-                false
+            let index = *self.current_curve_index.lock().unwrap();
+            let curve = config
+                .curves
+                .get_mut(index)
+                .ok_or_else(|| Failed("Invalid current fan curve index".into()))?;
+            if curve.is_builtin() {
+                return Err(Failed(BUILTIN_READ_ONLY.into()));
             }
-        };
-
-        if valid_index {
-            // Ensure config is saved immediately
-            if let Err(e) = self.ensure_config_saved() {
-                error!("Failed to save config after adding point: {}", e);
-                return Err(zbus_error_from_display(format!(
-                    "Failed to save config: {}",
-                    e
-                )));
-            }
-
-            info!("Added fan curve point: {}°C -> {}%", temp, duty);
-
-            if let Err(e) = Self::fan_curve_changed(&ctxt).await {
-                warn!("Failed to emit FanCurveChanged signal: {}", e);
-            }
-
-            Ok(())
-        } else {
-            Err(zbus_error_from_display("Invalid current fan curve index"))
+            curve.add_point(temp, duty * 100);
         }
+        self.save()?;
+
+        info!("Added fan curve point: {}°C -> {}%", temp, duty);
+        emit_curve_changed(&ctxt).await;
+        Ok(())
     }
 
     /// Remove last fan curve point
@@ -870,56 +748,30 @@ impl FanCurveDaemon {
     ) -> zbus::fdo::Result<()> {
         debug!("Removing last fan curve point");
 
-        let point_removed = {
+        {
             let mut config = self.config.lock().unwrap();
-            let current_index = self.current_curve_index.lock().unwrap();
-
-            if *current_index < config.curves.len() {
-                if config.curves[*current_index].is_builtin() {
-                    return Err(zbus_error_from_display(BUILTIN_READ_ONLY));
-                }
-                config.curves[*current_index].remove_last_point().is_some()
-            } else {
-                return Err(zbus_error_from_display("Invalid current fan curve index"));
+            let index = *self.current_curve_index.lock().unwrap();
+            let curve = config
+                .curves
+                .get_mut(index)
+                .ok_or_else(|| Failed("Invalid current fan curve index".into()))?;
+            if curve.is_builtin() {
+                return Err(Failed(BUILTIN_READ_ONLY.into()));
             }
-        };
-
-        if point_removed {
-            // Ensure config is saved immediately
-            if let Err(e) = self.ensure_config_saved() {
-                error!("Failed to save config after removing point: {}", e);
-                return Err(zbus_error_from_display(format!(
-                    "Failed to save config: {}",
-                    e
-                )));
-            }
-
-            info!("Removed last fan curve point");
-
-            if let Err(e) = Self::fan_curve_changed(&ctxt).await {
-                warn!("Failed to emit FanCurveChanged signal: {}", e);
-            }
-
-            Ok(())
-        } else {
-            Err(zbus_error_from_display("No points to remove"))
+            curve
+                .remove_last_point()
+                .ok_or_else(|| Failed("No points to remove".into()))?;
         }
+        self.save()?;
+
+        info!("Removed last fan curve point");
+        emit_curve_changed(&ctxt).await;
+        Ok(())
     }
 
     /// Save configuration
     async fn save_config(&self) -> zbus::fdo::Result<()> {
-        debug!("Saving configuration");
-
-        if let Err(e) = self.ensure_config_saved() {
-            error!("Failed to save config: {}", e);
-            return Err(zbus_error_from_display(format!(
-                "Failed to save config: {}",
-                e
-            )));
-        }
-
-        info!("Configuration saved");
-        Ok(())
+        self.save()
     }
 
     /// Replace the daemon's in-memory curves with a full config from a client
@@ -933,7 +785,7 @@ impl FanCurveDaemon {
         #[zbus(signal_context)] ctxt: SignalContext<'_>,
     ) -> zbus::fdo::Result<()> {
         if curves.is_empty() {
-            return Err(zbus_error_from_display("Cannot set an empty curve list"));
+            return Err(Failed("Cannot set an empty curve list".into()));
         }
         // Built-in profiles are read-only: whatever a client sends for them,
         // they keep their factory definitions.
@@ -946,7 +798,7 @@ impl FanCurveDaemon {
             .iter()
             .position(|c| c.name() == current_name)
             .ok_or_else(|| {
-                zbus_error_from_display(format!(
+                Failed(format!(
                     "Current curve not found in provided config: {}",
                     current_name
                 ))
@@ -957,7 +809,7 @@ impl FanCurveDaemon {
         } else if (default_index as usize) < curves.len() {
             Some(default_index as usize)
         } else {
-            return Err(zbus_error_from_display("Invalid default curve index"));
+            return Err(Failed("Invalid default curve index".into()));
         };
 
         {
@@ -972,24 +824,13 @@ impl FanCurveDaemon {
             };
             *index = current_pos;
         }
-
-        if let Err(e) = self.ensure_config_saved() {
-            error!("Failed to save config after SetConfig: {}", e);
-            return Err(zbus_error_from_display(format!(
-                "Failed to save config: {}",
-                e
-            )));
-        }
+        self.save()?;
 
         info!(
             "Config replaced via DBus; active curve: {} (index {})",
             current_name, current_pos
         );
-
-        if let Err(e) = Self::fan_curve_changed(&ctxt).await {
-            warn!("Failed to emit FanCurveChanged signal: {}", e);
-        }
-
+        emit_curve_changed(&ctxt).await;
         Ok(())
     }
 
@@ -1030,10 +871,7 @@ impl FanCurveDaemon {
     /// profile isn't independent. Unlisted channels are unchanged.
     async fn set_channels(&self, channels: Vec<(u8, TempSource)>) -> zbus::fdo::Result<()> {
         if let Some((number, _)) = channels.iter().find(|(n, _)| !(1..=4).contains(n)) {
-            return Err(zbus_error_from_display(format!(
-                "Invalid channel: {}",
-                number
-            )));
+            return Err(Failed(format!("Invalid channel: {}", number)));
         }
 
         {
@@ -1050,13 +888,7 @@ impl FanCurveDaemon {
             }
         }
 
-        if let Err(e) = self.ensure_config_saved() {
-            error!("Failed to save config after SetChannels: {}", e);
-            return Err(zbus_error_from_display(format!(
-                "Failed to save config: {}",
-                e
-            )));
-        }
+        self.save()?;
         info!("Fan channel temperature sources updated");
         Ok(())
     }
@@ -1079,7 +911,7 @@ impl FanCurveDaemon {
     ) -> zbus::fdo::Result<()> {
         debug!("Reloading configuration from disk");
 
-        let new_config = Self::load_config().map_err(zbus_error_from_display)?;
+        let new_config = Self::load_config().map_err(|e| Failed(e.to_string()))?;
 
         {
             let mut config = self.config.lock().unwrap();
@@ -1092,12 +924,14 @@ impl FanCurveDaemon {
         }
 
         info!("Configuration reloaded from disk");
-
-        if let Err(e) = Self::fan_curve_changed(&ctxt).await {
-            warn!("Failed to emit FanCurveChanged signal: {}", e);
-        }
-
+        emit_curve_changed(&ctxt).await;
         Ok(())
+    }
+}
+
+async fn emit_curve_changed(ctxt: &SignalContext<'_>) {
+    if let Err(e) = FanCurveDaemon::fan_curve_changed(ctxt).await {
+        warn!("Failed to emit FanCurveChanged signal: {}", e);
     }
 }
 

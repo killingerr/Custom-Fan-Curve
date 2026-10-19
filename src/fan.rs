@@ -150,10 +150,6 @@ impl FanCurve {
         &self.points
     }
 
-    pub fn points_mut(&mut self) -> &mut Vec<FanPoint> {
-        &mut self.points
-    }
-
     pub fn add_point(&mut self, temp: i16, duty: u16) {
         self.points.push(FanPoint::new(temp, duty));
         self.points.sort_by_key(|p| p.temp);
@@ -164,15 +160,7 @@ impl FanCurve {
     }
 
     pub fn remove_point(&mut self, index: usize) -> Option<FanPoint> {
-        if index < self.points.len() {
-            Some(self.points.remove(index))
-        } else {
-            None
-        }
-    }
-
-    pub fn get_point(&self, index: usize) -> Option<&FanPoint> {
-        self.points.get(index)
+        (index < self.points.len()).then(|| self.points.remove(index))
     }
 
     /// Calculate fan duty for a given temperature using linear interpolation
@@ -182,12 +170,9 @@ impl FanCurve {
         duty_for_temperature(&self.points, temp_thousandths)
     }
 
-    /// Calculate fan duty percentage for a given temperature using linear interpolation
-    /// This is a convenience method that maintains backward compatibility
+    /// Same as `calculate_duty_for_temperature`, with the temperature in °C
     pub fn calculate_duty_for_temperature_celsius(&self, temperature: f32) -> u16 {
-        // Convert Celsius to thousandths of Celsius
-        let temp_thousandths = (temperature * 1000.0) as u32;
-        self.calculate_duty_for_temperature(temp_thousandths)
+        self.calculate_duty_for_temperature((temperature * 1000.0) as u32)
     }
 
     // Built-in curves mirror system76-power's FanCurve definitions (src/fan.rs
@@ -261,66 +246,33 @@ impl FanCurve {
             _ => "Standard",
         }
     }
-
-    pub fn save_to_file(&self, path: &Path) -> Result<()> {
-        let json = serde_json::to_string_pretty(self)?;
-        fs::write(path, json)?;
-        Ok(())
-    }
-
-    pub fn load_from_file(path: &Path) -> Result<Self> {
-        let json = fs::read_to_string(path)?;
-        let curve: FanCurve = serde_json::from_str(&json)?;
-        Ok(curve)
-    }
 }
 
 /// Fan duty (ten-thousandths, 0-10000) for a temperature in thousandths of
 /// a degree Celsius, linearly interpolated between `points`.
 pub fn duty_for_temperature(points: &[FanPoint], temp_thousandths: u32) -> u16 {
-    if points.is_empty() {
+    // Curve points store whole °C (e.g. 30000 thousandths -> 30°C)
+    let temp = (temp_thousandths / 1000) as i16;
+    let (Some(first), Some(last)) = (points.first(), points.last()) else {
         return 0;
+    };
+    if temp <= first.temp {
+        return first.duty;
+    }
+    if temp >= last.temp {
+        return last.duty;
     }
 
-    // Convert thousandths of Celsius to whole degrees, since curve points
-    // store temperature in whole °C (e.g. 30000 thousandths -> 30°C)
-    let temp_celsius = (temp_thousandths / 1000) as i16;
-
-    // If temperature is below the lowest point, return the duty of the lowest point
-    if temp_celsius <= points[0].temp {
-        return points[0].duty;
-    }
-
-    // If temperature is above the highest point, return the duty of the highest point
-    if temp_celsius >= points.last().unwrap().temp {
-        return points.last().unwrap().duty;
-    }
-
-    // Find the two points to interpolate between
-    for i in 0..points.len() - 1 {
-        let point1 = &points[i];
-        let point2 = &points[i + 1];
-
-        if temp_celsius >= point1.temp && temp_celsius <= point2.temp {
-            // Linear interpolation between the two points
-            let temp1 = point1.temp as f32;
-            let temp2 = point2.temp as f32;
-            let duty1 = point1.duty as f32;
-            let duty2 = point2.duty as f32;
-            let temp_current = temp_celsius as f32;
-
-            // Calculate the interpolation factor
-            let factor = (temp_current - temp1) / (temp2 - temp1);
-
-            // Interpolate the duty
-            let interpolated_duty = duty1 + factor * (duty2 - duty1);
-
-            return interpolated_duty.round() as u16;
-        }
-    }
-
-    // Fallback (should not reach here)
-    0
+    // Points are sorted, so the first segment ending at or above `temp` contains it
+    points
+        .windows(2)
+        .find(|w| temp <= w[1].temp)
+        .map(|w| {
+            let (a, b) = (&w[0], &w[1]);
+            let factor = f32::from(temp - a.temp) / f32::from(b.temp - a.temp);
+            (f32::from(a.duty) + factor * (f32::from(b.duty) - f32::from(a.duty))).round() as u16
+        })
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -360,7 +312,13 @@ impl FanCurveConfig {
     pub fn save_to_file(&self, path: &Path) -> Result<()> {
         // Never persist edits over built-in profiles; custom curves save as-is.
         let json = serde_json::to_string_pretty(&self.for_persistence())?;
-        fs::write(path, json)?;
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        // Write then rename, so a crash mid-write never leaves a truncated config
+        let tmp = path.with_extension("tmp");
+        fs::write(&tmp, json)?;
+        fs::rename(&tmp, path)?;
         Ok(())
     }
 
@@ -396,68 +354,6 @@ impl FanCurveConfig {
             default_curve_index: self.default_curve_index,
             channels: self.channels.clone(),
         }
-    }
-
-    /// Validate that the configuration is properly saved and can be loaded
-    pub fn validate_persistence(&self) -> Result<()> {
-        let config_path = Self::get_config_path();
-        let expected = self.for_persistence();
-
-        // Save the current config
-        self.save_to_file(&config_path)?;
-
-        // Try to load it back
-        let loaded_config = Self::load_from_file(&config_path)?;
-
-        // Validate that the loaded config matches what persistence writes
-        if loaded_config.curves.len() != expected.curves.len() {
-            return Err(crate::errors::FanCurveError::Config(
-                "Curve count mismatch after save/load".to_string(),
-            ));
-        }
-
-        for (i, (original, loaded)) in expected
-            .curves
-            .iter()
-            .zip(loaded_config.curves.iter())
-            .enumerate()
-        {
-            if original.name() != loaded.name() {
-                return Err(crate::errors::FanCurveError::Config(format!(
-                    "Curve {} name mismatch after save/load",
-                    i
-                )));
-            }
-
-            if original.points().len() != loaded.points().len() {
-                return Err(crate::errors::FanCurveError::Config(format!(
-                    "Curve {} point count mismatch after save/load",
-                    i
-                )));
-            }
-
-            for (j, (orig_point, load_point)) in original
-                .points()
-                .iter()
-                .zip(loaded.points().iter())
-                .enumerate()
-            {
-                if orig_point.temp != load_point.temp || orig_point.duty != load_point.duty {
-                    return Err(crate::errors::FanCurveError::Config(format!(
-                        "Curve {} point {} data mismatch after save/load",
-                        i, j
-                    )));
-                }
-            }
-        }
-
-        if expected.default_curve_index != loaded_config.default_curve_index {
-            return Err(crate::errors::FanCurveError::Config(
-                "Default curve index mismatch after save/load".to_string(),
-            ));
-        }
-
-        Ok(())
     }
 }
 
@@ -619,13 +515,6 @@ mod tests {
         assert_eq!(loaded_custom.name(), "Custom Test");
         assert_eq!(loaded_custom.points().len(), 5);
 
-        // Round-trip through for_persistence (what save_to_file writes)
-        let expected = config.for_persistence();
-        let reloaded =
-            FanCurveConfig::load_from_file(&config_path).expect("Failed to reload config");
-        assert_eq!(reloaded.curves.len(), expected.curves.len());
-        assert_eq!(reloaded.default_curve_index, expected.default_curve_index);
-
         // Clean up test file
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -638,41 +527,12 @@ mod tests {
         curve.add_point(50, 10000); // 100% = 10000/10000 at 50°C
         curve.add_point(100, 10000);
 
-        // Test at exactly 50°C
-        let temp_50c = 50.0;
-        let temp_thousandths = (temp_50c * 1000.0) as u32; // 50000 thousandths
-        let duty = curve.calculate_duty_for_temperature(temp_thousandths);
-
-        println!(
-            "Temperature: {}°C ({} thousandths)",
-            temp_50c, temp_thousandths
-        );
-        println!("Calculated duty: {} (should be 10000 for 100%)", duty);
-        println!("Duty percentage: {}%", duty / 100);
-
-        // Test PWM conversion
-        let pwm = ((u32::from(duty) * 255) / 10000) as u8;
-        println!("PWM value: {} (should be 255 for 100%)", pwm);
-
-        // Verify the calculations
-        assert_eq!(duty, 10000, "Duty should be 10000 for 100% at 50°C");
-        assert_eq!(pwm, 255, "PWM should be 255 for 100% duty");
-
-        // Test at 51°C (should still be 100% due to interpolation)
-        let temp_51c = 51.0;
-        let temp_thousandths_51 = (temp_51c * 1000.0) as u32;
-        let duty_51 = curve.calculate_duty_for_temperature(temp_thousandths_51);
-        let pwm_51 = ((u32::from(duty_51) * 255) / 10000) as u8;
-
-        println!("Temperature: {}°C", temp_51c);
-        println!("Calculated duty: {} (should be 10000 for 100%)", duty_51);
-        println!("Duty percentage: {}%", duty_51 / 100);
-        println!("PWM value: {} (should be 255 for 100%)", pwm_51);
-
-        // At 51°C, it should interpolate between 50°C (100%) and 100°C (100%)
-        // So it should still be 100%
-        assert_eq!(duty_51, 10000, "Duty should be 10000 for 100% at 51°C");
-        assert_eq!(pwm_51, 255, "PWM should be 255 for 100% duty at 51°C");
+        // At 50°C and between two 100% points at 51°C
+        for temp in [50_000, 51_000] {
+            let duty = curve.calculate_duty_for_temperature(temp);
+            assert_eq!(duty, 10000);
+            assert_eq!(((u32::from(duty) * 255) / 10000) as u8, 255);
+        }
     }
 
     #[test]
