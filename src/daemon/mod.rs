@@ -6,7 +6,6 @@ use crate::{
     cpu_temp::CpuTempDetector,
     errors::{FanCurveError, Result},
     fan::{FanCurve, FanCurveConfig},
-    fan_detector::FanDetector,
     overheat::OverheatGuard,
     DBUS_OBJECT_PATH, DBUS_SERVICE_NAME,
 };
@@ -162,7 +161,8 @@ enum ClaimOutcome {
     Granted,
     /// Another program holds the claim; this daemon must not write the fans.
     HeldByOther,
-    /// system76-power isn't on the bus, so nothing else drives the fans.
+    /// system76-power isn't on the bus, so there is no claim and this daemon
+    /// must not write the fans.
     NotRunning,
     /// system76-power predates ClaimFanControl; its curve keeps running.
     Unsupported,
@@ -183,13 +183,10 @@ impl ClaimOutcome {
         }
     }
 
-    /// Whether this daemon should write the fans: only when it holds the
-    /// claim or nothing else can be driving them.
+    /// Return whether this daemon should write the fans, which it does only
+    /// while it holds the claim.
     fn may_write(&self) -> bool {
-        matches!(
-            self,
-            ClaimOutcome::Granted | ClaimOutcome::NotRunning | ClaimOutcome::Unsupported
-        )
+        matches!(self, ClaimOutcome::Granted)
     }
 
     fn log(&self) {
@@ -199,12 +196,13 @@ impl ClaimOutcome {
                 "Another program holds the fan control claim; \
                  not writing the fans until it releases"
             ),
-            ClaimOutcome::NotRunning => {
-                info!("system76-power is not running; controlling fans directly")
-            }
+            ClaimOutcome::NotRunning => warn!(
+                "system76-power is not running; \
+                 not writing the fans until it grants the claim"
+            ),
             ClaimOutcome::Unsupported => warn!(
                 "system76-power does not support ClaimFanControl; \
-                 its fan curve will keep writing PWM alongside this daemon"
+                 leaving the fans to its curve"
             ),
             ClaimOutcome::Failed(why) => warn!(
                 "system76-power refused the fan control claim ({}); \
@@ -318,9 +316,9 @@ async fn publish_overheat(
 }
 
 /// Periodically read the CPU temperature, look up the duty on the current
-/// curve, and apply it to the fans, unless another program holds the fan
-/// control claim. On shutdown, hands control back to system76-power if it was
-/// claimed, otherwise returns the fans to automatic (firmware) control.
+/// curve, and apply it to the Thelio Io board's fans while this daemon holds
+/// the fan control claim. On shutdown, it hands control back to system76-power,
+/// or returns the fans to automatic control itself if the release fails.
 async fn run_control_loop(
     connection: &zbus::Connection,
     config: Arc<Mutex<FanCurveConfig>>,
@@ -332,16 +330,8 @@ async fn run_control_loop(
         warn!("Control loop: CPU temperature detection unavailable: {}", e);
     }
 
-    // Thelio Io boards get per-channel control. Other hardware (e.g. laptops)
-    // keeps driving the single CPU fan through FanDetector.
     let mut board = IoBoard::discover();
     let mut gpu_temp = GpuTemp::discover();
-    let mut fan_detector = FanDetector::new();
-    if board.is_none() {
-        if let Err(e) = fan_detector.initialize() {
-            warn!("Control loop: fan detection unavailable: {}", e);
-        }
-    }
 
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
@@ -397,8 +387,8 @@ async fn run_control_loop(
 
                 let was_overheating = overheat.is_active();
 
-                match board.as_mut() {
-                    Some(board) => board_step(
+                if let Some(board) = board.as_mut() {
+                    board_step(
                         &config,
                         &current_curve_index,
                         &status,
@@ -406,16 +396,7 @@ async fn run_control_loop(
                         cpu,
                         gpu.value(),
                         &mut overheat,
-                    ),
-                    None => control_step(
-                        &config,
-                        &current_curve_index,
-                        &status,
-                        &fan_detector,
-                        cpu,
-                        gpu.value(),
-                        &mut overheat,
-                    ),
+                    );
                 }
                 let changed = overheat.is_active() != was_overheating;
                 publish_overheat(connection, &status, &overheat, changed).await;
@@ -437,32 +418,23 @@ async fn run_control_loop(
     }
 
     let released = claim == ClaimOutcome::Granted && release_fan_control(connection).await;
-    if !restore_fans_on_exit(&claim, released, board.is_some()) {
+    if !restore_fans_on_exit(&claim, released) {
         return;
     }
 
-    info!("Returning fans to automatic control");
     if let Some(board) = &board {
+        info!("Returning fans to automatic control");
         board.set_automatic();
-    } else if fan_detector.is_initialized() {
-        if let Err(e) = fan_detector.set_duty(None) {
-            warn!("Failed to return fans to automatic control: {}", e);
-        }
     }
 }
 
 /// Whether the daemon must return the fans it drove to automatic control
 /// itself when it stops.
-fn restore_fans_on_exit(claim: &ClaimOutcome, released: bool, thelio_board: bool) -> bool {
-    // Under another claimant or system76-power's curve this daemon never
-    // wrote the fans, so they aren't its to touch.
-    if !claim.may_write() {
-        return false;
-    }
-    // On release system76-power returns Thelio Io boards to automatic and
-    // resumes its curve. It doesn't manage laptop fans, so those are always
-    // handed back to the firmware here.
-    !(thelio_board && released)
+fn restore_fans_on_exit(claim: &ClaimOutcome, released: bool) -> bool {
+    // Without the claim this daemon never wrote the fans, so they aren't its
+    // to touch. On release system76-power returns the fans to automatic and
+    // resumes its curve.
+    claim.may_write() && !released
 }
 
 /// Current CPU temperature (°C), or None if it can't be read.
@@ -536,65 +508,6 @@ fn board_step(
     st.pwm = pwm;
     st.fan_speeds = board.read_speeds();
     st.channels = channels;
-}
-
-/// One iteration of the control loop on hardware without a Thelio Io board
-fn control_step(
-    config: &Arc<Mutex<FanCurveConfig>>,
-    current_curve_index: &Arc<Mutex<usize>>,
-    status: &Arc<Mutex<DaemonStatus>>,
-    fan_detector: &FanDetector,
-    cpu: Option<f32>,
-    gpu: Option<f32>,
-    overheat: &mut OverheatGuard,
-) {
-    if !fan_detector.is_initialized() {
-        return;
-    }
-    let Some(temperature) = cpu else {
-        return;
-    };
-
-    let fan_speeds = fan_detector.read_all_fan_speeds().unwrap_or_default();
-
-    let curve = {
-        let cfg = config.lock().unwrap();
-        if cfg.curves.is_empty() {
-            return;
-        }
-        let idx = (*current_curve_index.lock().unwrap()).min(cfg.curves.len() - 1);
-        cfg.curves[idx].clone()
-    };
-
-    // The GPU only counts toward overheating; the fan follows the CPU.
-    let duty = if overheat.update(Some(temperature), gpu) {
-        10_000
-    } else {
-        curve.calculate_duty_for_temperature_celsius(temperature)
-    };
-    let pwm = ((u32::from(duty) * 255) / 10_000) as u8;
-
-    {
-        let mut st = status.lock().unwrap();
-        st.temperature = temperature as f64;
-        st.duty = duty;
-        st.pwm = pwm;
-        st.fan_speeds = fan_speeds;
-    }
-
-    // Write every tick, even when unchanged: Thelio Io boards take over
-    // the fans on their own if nothing is written for several seconds.
-    debug!(
-        "Control loop: {:.1}°C -> duty {} ({}%) -> PWM {}",
-        temperature,
-        duty,
-        duty / 100,
-        pwm
-    );
-
-    if let Err(e) = fan_detector.set_duty(Some(pwm)) {
-        warn!("Control loop: failed to set fan duty: {}", e);
-    }
 }
 
 #[dbus_interface(name = "com.system76.FanCurveDaemon")]
@@ -940,41 +853,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn laptop_fans_are_handed_back_even_after_releasing_the_claim() {
-        assert!(restore_fans_on_exit(&ClaimOutcome::Granted, true, false));
-        assert!(restore_fans_on_exit(
-            &ClaimOutcome::NotRunning,
-            false,
-            false
-        ));
-        assert!(restore_fans_on_exit(
-            &ClaimOutcome::Unsupported,
-            false,
-            false
-        ));
-    }
-
-    #[test]
     fn thelio_fans_are_left_to_system76_power_once_released() {
-        assert!(!restore_fans_on_exit(&ClaimOutcome::Granted, true, true));
+        assert!(!restore_fans_on_exit(&ClaimOutcome::Granted, true));
         // Release failed: nothing resumes them, so the daemon does
-        assert!(restore_fans_on_exit(&ClaimOutcome::Granted, false, true));
-        assert!(restore_fans_on_exit(&ClaimOutcome::NotRunning, false, true));
+        assert!(restore_fans_on_exit(&ClaimOutcome::Granted, false));
     }
 
     #[test]
     fn fans_the_daemon_never_wrote_are_left_alone() {
-        for thelio in [false, true] {
-            assert!(!restore_fans_on_exit(
-                &ClaimOutcome::HeldByOther,
-                false,
-                thelio
-            ));
-            assert!(!restore_fans_on_exit(
-                &ClaimOutcome::Failed("polkit".to_string()),
-                false,
-                thelio
-            ));
+        for claim in [
+            ClaimOutcome::HeldByOther,
+            ClaimOutcome::NotRunning,
+            ClaimOutcome::Unsupported,
+            ClaimOutcome::Failed("polkit".to_string()),
+        ] {
+            assert!(!restore_fans_on_exit(&claim, false));
         }
     }
 }

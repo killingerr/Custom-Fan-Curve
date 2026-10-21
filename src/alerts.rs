@@ -8,9 +8,11 @@ use crate::overheat::OVERHEAT_OFF_C;
 pub mod fan_control {
     /// The daemon holds system76-power's fan control claim.
     pub const CLAIMED: &str = "claimed";
-    /// system76-power isn't running; the daemon drives the fans alone.
+    /// system76-power isn't running, so the daemon can't claim the fans and
+    /// isn't writing them.
     pub const DIRECT: &str = "direct";
-    /// system76-power can't hand over control; both set the fans.
+    /// system76-power can't hand over control, so its own curve is running and
+    /// the daemon isn't writing the fans.
     pub const SHARED: &str = "shared";
     /// Another program holds the claim; the daemon isn't writing the fans.
     pub const HELD_BY_OTHER: &str = "held-by-other";
@@ -65,10 +67,17 @@ pub fn fan_control_message(state: &str, detail: &str) -> Option<Message> {
             ),
         )),
         fan_control::SHARED => Some((
-            "Fan control conflict".to_string(),
-            "This system76-power can't hand over fan control, so its fan curve and yours \
-             are both setting the fans. Install a system76-power with fan control claim \
-             support to fix this."
+            "Fan curve not running".to_string(),
+            "This system76-power can't hand over fan control, so its own fan curve is \
+             running instead of yours. Install a system76-power with fan control claim \
+             support to use your fan curve."
+                .to_string(),
+        )),
+        fan_control::DIRECT => Some((
+            "Fan curve not running".to_string(),
+            "system76-power isn't running, so the fan app can't take control of the fans \
+             and your fan curve isn't running. It resumes automatically when \
+             system76-power starts."
                 .to_string(),
         )),
         _ => None,

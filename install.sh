@@ -257,8 +257,8 @@ system76_power_can_claim() {
 }
 
 ensure_system76_power() {
-    # system76-power only drives the fans on Thelio Io boards, so an older
-    # version only conflicts with the daemon there.
+    # The daemon only drives Thelio Io boards, and only after system76-power
+    # grants it the fan control claim, so claim support only matters there.
     if ! grep -qsx -e system76_thelio_io -e system76_io /sys/class/hwmon/*/name; then
         return 0
     fi
@@ -294,7 +294,7 @@ ensure_system76_power() {
     else
         print_warning "Automatic system76-power install needs Pop!_OS 24.04."
     fi
-    print_warning "Until it's updated, system76-power and this app will both set the fans."
+    print_warning "Until it's updated, this app won't control the fans."
     print_warning "To build it from source:"
     print_warning "  git clone -b fan-control-claim-pr https://github.com/tonysystem76/system76-power.git"
     print_warning "  cd system76-power && make && sudo make install"

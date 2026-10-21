@@ -1,10 +1,11 @@
 use crate::errors::{FanCurveError, Result};
-use log::{debug, info, warn};
+use log::{info, warn};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// hwmon devices whose fans this app may have switched to manual control:
-/// System76 laptops (system76, system76_acpi) and Thelio Io boards.
+/// These are the hwmon devices whose fans this app may have switched to manual
+/// control: Thelio Io boards, and System76 laptops (system76, system76_acpi),
+/// which older versions of the app drove.
 const SYSTEM76_FAN_HWMON: [&str; 4] = [
     "system76",
     "system76_acpi",
@@ -48,8 +49,8 @@ pub struct FanSensor {
     pub fan_label: String,
 }
 
-/// CPU fan control for System76 hwmon devices without a Thelio Io board's
-/// per-channel support (e.g. laptops)
+/// FanDetector reads the CPU fan's speed from a System76 hwmon device, for the
+/// GUI when no daemon reports it.
 #[derive(Default)]
 pub struct FanDetector {
     fans: Vec<FanSensor>,
@@ -122,38 +123,6 @@ impl FanDetector {
 
     pub fn is_initialized(&self) -> bool {
         !self.fans.is_empty()
-    }
-
-    /// Set every fan to `duty` (PWM 0-255), or return them to automatic
-    /// control (pwmN_enable = 2) when `duty` is None, like system76-power
-    pub fn set_duty(&self, duty: Option<u8>) -> Result<()> {
-        for fan in &self.fans {
-            let pwm_path = fan.hwmon_path.join(format!("pwm{}", fan.fan_number));
-            let enable_path = fan.hwmon_path.join(format!("pwm{}_enable", fan.fan_number));
-
-            let Some(duty) = duty else {
-                match fs::write(&enable_path, "2") {
-                    Ok(()) => info!("Fan {} set to automatic mode", fan.fan_number),
-                    Err(e) => warn!(
-                        "Failed to enable automatic mode for fan {} at {}: {}",
-                        fan.fan_number,
-                        enable_path.display(),
-                        e
-                    ),
-                }
-                continue;
-            };
-
-            if !pwm_path.exists() {
-                warn!("PWM file does not exist: {}", pwm_path.display());
-                continue;
-            }
-            // Some boards have no enable file; the PWM write still takes effect.
-            let _ = fs::write(&enable_path, "1");
-            fs::write(&pwm_path, duty.to_string())?;
-            debug!("Fan {} PWM set to {}", fan.fan_number, duty);
-        }
-        Ok(())
     }
 }
 
